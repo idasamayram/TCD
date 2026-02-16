@@ -43,14 +43,3 @@ output:
   plots_dir: "plots"
   save_heatmaps: true
   save_features: true
-
-intervention:
-  method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "features.0"
-  concept_indices: []  # leave empty to auto-select
-
-output:
-  results_dir: "results"
-  plots_dir: "plots"
-  save_heatmaps: true
-  save_features: true

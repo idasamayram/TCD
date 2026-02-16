@@ -97,14 +97,18 @@ class VibrationDataset(Dataset):
     
     Args:
         root_dir: Path to directory containing 'good/' and 'bad/' subdirectories
-        split: 'train', 'val', or 'test' (currently loads all, TODO: implement splits)
+        split: 'train', 'val', or 'test' (NOTE: Currently not implemented - all data is loaded.
+               TODO: Implement train/val/test splitting based on this parameter)
         transform: Optional transform to apply to samples
     """
     
     def __init__(self, root_dir: str, split: str = 'train', transform=None):
         self.root_dir = Path(root_dir)
-        self.split = split
+        self.split = split  # Reserved for future train/val/test splitting
         self.transform = transform
+        
+        # NOTE: Currently loads all available data regardless of split parameter
+        # TODO: Implement proper train/val/test splitting
         
         # Load file paths and labels
         self.samples = []
