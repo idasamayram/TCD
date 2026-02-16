@@ -130,7 +130,7 @@ python scripts/discover_concepts.py \
     --variant C \
     --features results/crp_features \
     --output results/concepts_C \
-    --layer features.0
+    --layer conv1
 ```
 
 ### 4. Evaluate Concepts

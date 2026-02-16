@@ -145,16 +145,10 @@ def get_layer_names_model(model: torch.nn.Module, model_name: str = 'cnn1d') -> 
     """
     layer_names = []
     
-    # For CNN1D_Wide, get Conv1d layers from features module
-    if hasattr(model, 'features'):
-        for i, module in enumerate(model.features):
-            if isinstance(module, torch.nn.Conv1d):
-                layer_names.append(f"features.{i}")
-    else:
-        # Fallback: search all Conv1d layers
-        for name, module in model.named_modules():
-            if isinstance(module, torch.nn.Conv1d):
-                layer_names.append(name)
+    # For CNN1D_Wide with flat attributes, directly search for Conv1d layers
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Conv1d):
+            layer_names.append(name)
     
     return layer_names
 
@@ -165,10 +159,12 @@ if __name__ == "__main__":
     model = CNN1D_Wide()
     
     # Test layer name extraction
-    layer_names = get_layer_names_model(model)
-    print(f"Layer names: {layer_names}")
+    layer_names_detected = get_layer_names_model(model)
+    print(f"Detected layer names: {layer_names_detected}")
     
-    expected = ['features.0', 'features.3', 'features.6']
-    assert layer_names == expected, f"Expected {expected}, got {layer_names}"
+    # Compare with the canonical layer names
+    expected = get_layer_names()
+    print(f"Expected layer names: {expected}")
+    assert layer_names_detected == expected, f"Expected {expected}, got {layer_names_detected}"
     
     print("✓ FeatureVisualization test passed!")

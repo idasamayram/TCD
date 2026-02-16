@@ -68,7 +68,7 @@ def test_attribution_with_layer_recording():
     composite = get_composite('epsilon_plus')
     
     # Record specific layers
-    layer_names = ['features.0', 'features.3', 'features.6']
+    layer_names = ['conv1', 'conv2', 'conv3']
     conditions = [{"y": 0}, {"y": 0}]
     
     heatmap, _, _, attr = attributor(
