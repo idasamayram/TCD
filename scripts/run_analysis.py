@@ -80,56 +80,62 @@ def run_crp_analysis(
     
     print(f"Running CRP analysis on {len(dataset)} samples...")
     sample_idx = 0
-    
-    with torch.no_grad():
-        for data, labels in tqdm(dataloader, desc="Processing batches"):
-            data = data.to(device)
-            batch_size_actual = data.shape[0]
-            
-            # Get model outputs
-            outputs = model(data)
-            
-            # Prepare conditions for each sample
-            conditions = [{"y": label.item()} for label in labels]
-            
-            # Compute CRP attribution with layer recording
-            data_with_grad = data.requires_grad_(True)
-            heatmap, _, _, attr = attributor(
-                data_with_grad,
-                conditions,
-                composite,
-                record_layer=layer_names
-            )
-            
-            # Extract concept relevances per layer
-            eps_relevances = {}
+
+    # NOTE: Do NOT use torch.no_grad() here!
+    # CRP/LRP requires gradient computation graph to propagate relevance.
+    # model.eval() already handles dropout/batchnorm for inference.
+
+    for data, labels in tqdm(dataloader, desc="Processing batches"):
+        data = data.to(device)
+        batch_size_actual = data.shape[0]
+
+        # Get model outputs
+        outputs = model(data)
+
+        # Prepare conditions for each sample
+        conditions = [{"y": label.item()} for label in labels]
+
+        # Compute CRP attribution with layer recording
+        # requires_grad_(True) MUST be called OUTSIDE of no_grad context
+
+        data_with_grad = data.requires_grad_(True)
+        heatmap, _, _, attr = attributor(
+            data_with_grad,
+            conditions,
+            composite,
+            record_layer=layer_names
+        )
+
+        # Extract concept relevances per layer
+        eps_relevances = {}
+        for layer in layer_names:
+            if layer in attr.relevances:
+                layer_rel = attr.relevances[layer]
+                # Use ChannelConcept to get per-filter relevance
+                concept_rel = cc.attribute(layer_rel, abs_norm=True)
+                eps_relevances[layer] = concept_rel.cpu()
+
+        # Store features grouped by class
+        for i in range(batch_size_actual):
+            class_id = labels[i].item()
+
+            # Store layer features
             for layer in layer_names:
-                if layer in attr.relevances:
-                    layer_rel = attr.relevances[layer]
-                    # Use ChannelConcept to get per-filter relevance
-                    concept_rel = cc.attribute(layer_rel, abs_norm=True)
-                    eps_relevances[layer] = concept_rel.cpu()
-            
-            # Store features grouped by class
-            for i in range(batch_size_actual):
-                class_id = labels[i].item()
-                
-                # Store layer features
-                for layer in layer_names:
-                    if layer in eps_relevances:
-                        class_features[class_id][layer].append(eps_relevances[layer][i])
-                
-                # Store outputs
-                class_outputs[class_id].append(outputs[i].cpu())
-                
-                # Store sample ID
-                class_sample_ids[class_id].append(sample_idx + i)
-                
-                # Store heatmap
-                class_heatmaps[class_id].append(heatmap[i].cpu().numpy())
-            
-            sample_idx += batch_size_actual
-    
+                if layer in eps_relevances:
+                    class_features[class_id][layer].append(eps_relevances[layer][i])
+
+            # Store outputs
+            class_outputs[class_id].append(outputs[i].cpu())
+
+            # Store sample ID
+            class_sample_ids[class_id].append(sample_idx + i)
+
+            # Store heatmap
+            class_heatmaps[class_id].append(heatmap[i].cpu().numpy())
+
+        sample_idx += batch_size_actual
+
+
     # Save results per class
     os.makedirs(output_path, exist_ok=True)
     
