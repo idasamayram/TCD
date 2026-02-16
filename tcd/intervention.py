@@ -20,7 +20,7 @@ class ConceptInterventionHook:
     
     Usage:
         hook = ConceptInterventionHook(method='suppress', concept_indices=[3, 5])
-        handle = model.features[0].register_forward_hook(hook)
+        handle = model.conv1.register_forward_hook(hook)
         output = model(x)  # Concepts 3 and 5 are suppressed
         handle.remove()
     """

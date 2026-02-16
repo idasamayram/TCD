@@ -9,3 +9,7 @@ pandas
 opencv-python
 umap-learn
 timm
+matplotlib
+scipy
+tqdm
+pyyaml
