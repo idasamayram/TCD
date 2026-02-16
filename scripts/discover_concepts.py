@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""
+Step 2: Discover Concepts - Run TCD variant pipeline.
+
+Loads pre-computed CRP features and applies TCD variant (A/B/C)
+to discover temporal concepts.
+
+Usage:
+    # Variant A: Filterbank
+    python scripts/discover_concepts.py --variant A --features results/crp_features --output results/concepts_A
+    
+    # Variant C: Learned clusters (requires features)
+    python scripts/discover_concepts.py --variant C --features results/crp_features --output results/concepts_C
+"""
+
+import argparse
+import os
+import yaml
+import torch
+import h5py
+import numpy as np
+import pickle
+from pathlib import Path
+
+from models.cnn1d_model import CNN1D_Wide
+from tcd.variants.filterbank import FilterBankTCD
+from tcd.variants.temporal_descriptors import TemporalDescriptorTCD
+from tcd.variants.learned_clusters import LearnedClusterTCD
+from tcd.visualization import plot_prototype_grid, plot_concept_relevance
+
+
+def load_config(config_path: str) -> dict:
+    """Load YAML configuration."""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def run_variant_a(
+    features_path: str,
+    output_path: str,
+    config: dict
+):
+    """
+    Run Variant A: Filterbank concepts.
+    
+    Args:
+        features_path: Path to CRP features directory
+        output_path: Output directory
+        config: Configuration dict
+    """
+    print("\n" + "="*60)
+    print("VARIANT A: Frequency-Band Filterbank Concepts")
+    print("="*60)
+    
+    # Load heatmaps
+    print("Loading heatmaps...")
+    heatmaps_list = []
+    labels_list = []
+    
+    for class_id in [0, 1]:
+        heatmaps_path = os.path.join(features_path, f"heatmaps_class_{class_id}.hdf5")
+        if not os.path.exists(heatmaps_path):
+            print(f"Warning: Heatmaps not found at {heatmaps_path}")
+            continue
+        
+        with h5py.File(heatmaps_path, 'r') as f:
+            heatmaps = np.array(f['heatmaps'])
+            heatmaps_list.append(heatmaps)
+            labels_list.extend([class_id] * len(heatmaps))
+            print(f"  Class {class_id}: {heatmaps.shape}")
+    
+    if not heatmaps_list:
+        print("Error: No heatmaps found. Run run_analysis.py first.")
+        return
+    
+    heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
+    labels = np.array(labels_list)
+    
+    # Initialize FilterBankTCD
+    bands = config['tcd']['filterbank_bands']
+    sample_rate = config['data']['sample_rate']
+    
+    tcd = FilterBankTCD(bands=bands, sample_rate=sample_rate)
+    print(f"\nFilterbank with {len(bands)} bands:")
+    for i, label in enumerate(tcd.get_concept_labels()):
+        print(f"  Concept {i}: {label}")
+    
+    # Extract concepts
+    print("\nExtracting concepts...")
+    concept_relevances = tcd.extract_concepts(heatmaps)
+    print(f"Concept relevances shape: {concept_relevances.shape}")
+    
+    # Compute importance per concept
+    importance = tcd.compute_concept_importance(heatmaps)
+    print("\nConcept importance:")
+    for i, (label, imp) in enumerate(zip(tcd.get_concept_labels(), importance)):
+        print(f"  {label}: {imp:.4f}")
+    
+    # Save results
+    os.makedirs(output_path, exist_ok=True)
+    
+    results = {
+        'variant': 'A',
+        'bands': bands,
+        'concept_labels': tcd.get_concept_labels(),
+        'concept_relevances': concept_relevances.numpy(),
+        'labels': labels,
+        'importance': importance
+    }
+    
+    with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
+    
+    print(f"\n✓ Results saved to {output_path}")
+
+
+def run_variant_c(
+    features_path: str,
+    output_path: str,
+    config: dict,
+    layer_name: str = 'features.0'
+):
+    """
+    Run Variant C: Learned cluster concepts.
+    
+    Args:
+        features_path: Path to CRP features directory
+        output_path: Output directory
+        config: Configuration dict
+        layer_name: Layer to use for concepts
+    """
+    print("\n" + "="*60)
+    print("VARIANT C: Learned Cluster / PCX-Style Concepts")
+    print("="*60)
+    
+    # Load concept features
+    print(f"Loading concept features for layer {layer_name}...")
+    features_list = []
+    labels_list = []
+    outputs_list = []
+    
+    for class_id in [0, 1]:
+        # Load concept relevances
+        h5_path = os.path.join(features_path, f"eps_relevances_class_{class_id}.hdf5")
+        if not os.path.exists(h5_path):
+            print(f"Warning: Features not found at {h5_path}")
+            continue
+        
+        with h5py.File(h5_path, 'r') as f:
+            if layer_name not in f:
+                print(f"Warning: Layer {layer_name} not in features file")
+                continue
+            features = np.array(f[layer_name])
+            features_list.append(features)
+            labels_list.extend([class_id] * len(features))
+        
+        # Load outputs
+        outputs_path = os.path.join(features_path, f"outputs_class_{class_id}.pt")
+        outputs = torch.load(outputs_path)
+        outputs_list.extend(outputs)
+        
+        print(f"  Class {class_id}: {features.shape}")
+    
+    if not features_list:
+        print("Error: No features found. Run run_analysis.py first.")
+        return
+    
+    features = torch.from_numpy(np.concatenate(features_list)).float()
+    labels = torch.tensor(labels_list).long()
+    outputs = torch.stack(outputs_list)
+    
+    print(f"\nTotal features: {features.shape}")
+    print(f"Feature dimension (n_concepts): {features.shape[1]}")
+    
+    # Initialize LearnedClusterTCD
+    n_prototypes = config['tcd']['n_prototypes']
+    tcd = LearnedClusterTCD(n_prototypes=n_prototypes, layer_name=layer_name)
+    
+    # Fit GMM prototypes
+    print(f"\nFitting {n_prototypes} prototypes per class...")
+    tcd.fit(features, labels, outputs)
+    
+    # Analyze prototypes per class
+    for class_id in [0, 1]:
+        print(f"\nClass {class_id} prototypes:")
+        
+        # Get prototype samples
+        top_k = config['tcd']['top_k_samples']
+        proto_samples = tcd.find_prototypes(class_id, top_k=top_k)
+        print(f"  Found top-{top_k} samples per prototype")
+        
+        # Get coverage
+        coverage = tcd.get_coverage(class_id)
+        print(f"  Coverage: {coverage}")
+        
+        # Get assignments
+        class_mask = labels == class_id
+        class_features = features[class_mask]
+        assignments = tcd.assign_prototype(class_features, class_id)
+        print(f"  Assignment distribution: {np.bincount(assignments)}")
+    
+    # Save results
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Save TCD model
+    with open(os.path.join(output_path, 'tcd_model.pkl'), 'wb') as f:
+        pickle.dump(tcd, f)
+    
+    results = {
+        'variant': 'C',
+        'layer_name': layer_name,
+        'n_prototypes': n_prototypes,
+        'features': features.numpy(),
+        'labels': labels.numpy(),
+        'outputs': outputs.numpy()
+    }
+    
+    with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
+    
+    print(f"\n✓ Results saved to {output_path}")
+
+
+def run_variant_b(
+    features_path: str,
+    output_path: str,
+    config: dict
+):
+    """
+    Run Variant B: Temporal descriptor concepts (SKELETON).
+    
+    Args:
+        features_path: Path to CRP features directory
+        output_path: Output directory
+        config: Configuration dict
+    """
+    print("\n" + "="*60)
+    print("VARIANT B: Temporal Descriptor Concepts (SKELETON)")
+    print("="*60)
+    
+    print("\nVariant B is not fully implemented yet.")
+    print("See tcd/variants/temporal_descriptors.py for TODO items.")
+    print("\nKey steps to implement:")
+    print("  1. Extract temporal descriptors (slope, peak, autocorr, spectral)")
+    print("  2. Cluster descriptors with k-means or GMM")
+    print("  3. Assign segments to concepts")
+    
+    # Create placeholder output
+    os.makedirs(output_path, exist_ok=True)
+    with open(os.path.join(output_path, 'README.txt'), 'w') as f:
+        f.write("Variant B is not yet implemented.\n")
+        f.write("See tcd/variants/temporal_descriptors.py for skeleton.\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Discover temporal concepts using TCD variants")
+    parser.add_argument('--config', type=str, default='configs/default.yaml',
+                       help='Path to config file')
+    parser.add_argument('--variant', type=str, required=True, choices=['A', 'B', 'C'],
+                       help='TCD variant: A (filterbank), B (temporal descriptors), C (learned clusters)')
+    parser.add_argument('--features', type=str, required=True,
+                       help='Path to CRP features directory from run_analysis.py')
+    parser.add_argument('--output', type=str, required=True,
+                       help='Output directory for concept results')
+    parser.add_argument('--layer', type=str, default='features.0',
+                       help='Layer to use for Variant C (default: features.0)')
+    
+    args = parser.parse_args()
+    
+    # Load config
+    config = load_config(args.config)
+    
+    # Run appropriate variant
+    if args.variant == 'A':
+        run_variant_a(args.features, args.output, config)
+    elif args.variant == 'B':
+        run_variant_b(args.features, args.output, config)
+    elif args.variant == 'C':
+        run_variant_c(args.features, args.output, config, layer_name=args.layer)
+
+
+if __name__ == "__main__":
+    main()
