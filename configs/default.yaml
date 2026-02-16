@@ -2,11 +2,11 @@
 # Temporal Concept Discovery for 1D time-series vibration data
 
 model:
-  path: "./cnn1d_model_final.ckpt"
+  path: "../cnn1d_model_final.ckpt"
   name: "cnn1d_wide"
 
 data:
-  path: "./data"
+  path: "../data"
   num_channels: 3  # X, Y, Z accelerometer axes
   seq_length: 2000  # timesteps
   sample_rate: 400  # Hz (5 seconds of data)

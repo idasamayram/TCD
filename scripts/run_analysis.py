@@ -167,7 +167,7 @@ def run_crp_analysis(
 
 def main():
     parser = argparse.ArgumentParser(description="Run CRP analysis on dataset")
-    parser.add_argument('--config', type=str, default='configs/default.yaml',
+    parser.add_argument('--config', type=str, default='../configs/default.yaml',
                        help='Path to config file')
     parser.add_argument('--model', type=str, default=None,
                        help='Path to model checkpoint (overrides config)')
@@ -207,7 +207,7 @@ def main():
     # Load dataset
     print(f"Loading dataset from {data_path}...")
     if os.path.exists(data_path):
-        dataset = VibrationDataset(data_path, split='train')
+        dataset = VibrationDataset(data_path)
         print(f"Loaded {len(dataset)} samples")
     else:
         print(f"Warning: Data path not found at {data_path}")
