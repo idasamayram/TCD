@@ -70,6 +70,20 @@ class CNN1D_Wide(nn.Module):
 
         return x
 
+
+def get_layer_names() -> List[str]:
+    """
+    Return conv layer names for CRP hooks.
+    
+    These correspond to the flat attribute names in CNN1D_Wide.
+    Use these names when calling record_layer in CRP attribution.
+    
+    Returns:
+        List of layer names: ["conv1", "conv2", "conv3", "conv4"]
+    """
+    return ["conv1", "conv2", "conv3", "conv4"]
+
+
 class VibrationDataset(Dataset):
     '''
     This version includes the operation data so that it can be used for stratified
@@ -132,94 +146,3 @@ class VibrationDataset(Dataset):
 
 
         return torch.tensor(data, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
-
-def get_layer_names() -> List[str]:
-    """
-    Return conv layer names for CRP hooks.
-    
-    These correspond to the flat attribute names in CNN1D_Wide.
-    Use these names when calling record_layer in CRP attribution.
-    
-    Returns:
-        List of layer names: ["conv1", "conv2", "conv3", "conv4"]
-    """
-    return ["conv1", "conv2", "conv3", "conv4"]
-
-
-class VibrationDataset(Dataset):
-    """
-    Dataset for CNC vibration signals stored as HDF5 files.
-    
-    Data structure:
-    - Root directory contains 'good/' and 'bad/' subdirectories
-    - Each subdirectory contains individual .h5 files
-    - Each .h5 file has a 'vibration' dataset of shape (3, 2000)
-    - good/ → label 0 (OK), bad/ → label 1 (NOK)
-    
-    Expected counts:
-    - ~5606 OK samples (label=0)
-    - ~777 NOK samples (label=1)
-    
-    Args:
-        root_dir: Path to directory containing 'good/' and 'bad/' subdirectories
-        split: 'train', 'val', or 'test' (NOTE: Currently not implemented - all data is loaded.
-               TODO: Implement train/val/test splitting based on this parameter)
-        transform: Optional transform to apply to samples
-    """
-    
-    def __init__(self, root_dir: str, split: str = 'train', transform=None):
-        self.root_dir = Path(root_dir)
-        self.split = split  # Reserved for future train/val/test splitting
-        self.transform = transform
-        
-        # NOTE: Currently loads all available data regardless of split parameter
-        # TODO: Implement proper train/val/test splitting
-        
-        # Load file paths and labels
-        self.samples = []
-        
-        # Load OK samples (label=0) from good/ subdirectory
-        good_dir = self.root_dir / 'good'
-        if good_dir.exists():
-            for h5_file in good_dir.glob('*.h5'):
-                self.samples.append((str(h5_file), 0))
-        
-        # Load NOK samples (label=1) from bad/ subdirectory
-        bad_dir = self.root_dir / 'bad'
-        if bad_dir.exists():
-            for h5_file in bad_dir.glob('*.h5'):
-                self.samples.append((str(h5_file), 1))
-        
-        if len(self.samples) == 0:
-            raise ValueError(f"No .h5 files found in {root_dir}/good or {root_dir}/bad")
-        
-        # Count samples per class
-        ok_count = sum(1 for _, label in self.samples if label == 0)
-        nok_count = sum(1 for _, label in self.samples if label == 1)
-        print(f"Loaded {len(self.samples)} samples: {ok_count} OK, {nok_count} NOK")
-    
-    def __len__(self):
-        return len(self.samples)
-    
-    def __getitem__(self, idx):
-        """
-        Load and return a sample.
-        
-        Returns:
-            signal: Tensor of shape (3, 2000) - tri-axial vibration
-            label: 0 (OK) or 1 (NOK)
-        """
-        h5_path, label = self.samples[idx]
-        
-        # Load vibration signal from HDF5
-        with h5py.File(h5_path, 'r') as f:
-            signal = f['vibration'][:]  # Shape: (3, 2000)
-        
-        # Convert to tensor
-        signal = torch.from_numpy(signal).float()
-        
-        # Apply transform if provided
-        if self.transform is not None:
-            signal = self.transform(signal)
-        
-        return signal, label
