@@ -5,7 +5,10 @@ CNN1D_Wide — Sequential version of the CNC thesis architecture for CRP compati
 import torch
 import torch.nn as nn
 from typing import List
-
+from torch.utils.data import DataLoader, Subset, Dataset, random_split
+from pathlib import Path
+import numpy as np
+import h5py
 
 class CNN1D_Wide(nn.Module):
     def __init__(self):
@@ -62,6 +65,68 @@ class CNN1D_Wide(nn.Module):
 
         return x
 
+class VibrationDataset(Dataset):
+    '''
+    This version includes the operation data so that it can be used for stratified
+    sampling in the train/val/test split.
+    '''
+    def __init__(self, data_dir, transform=None, augment_bad=False):
+        self.data_dir = Path(data_dir)
+        self.file_paths = []
+        self.labels = []
+        self.weights = []  # Optional for inverse frequency weighting
+        self.operations = []  # Optional for operation-based stratification
+        self.augment_bad = augment_bad
+        self.file_groups = []  # e.g., 'M01_Feb_2019_OP02_000'
+        self.transform = transform
+
+
+        for label, label_idx in zip(["good", "bad"], [0, 1]):  # 0=good, 1=bad
+            folder = self.data_dir / label
+            for file_name in folder.glob("*.h5"):
+                self.file_paths.append(file_name)
+                self.labels.append(label_idx)
+                # Extract operation (e.g., 'OP02' from 'M01_Feb_2019_OP02_000_window_0.h5')
+                operation = file_name.stem.split('_')[3]
+                self.operations.append(operation)
+                # Extract file group (e.g., 'M01_Feb_2019_OP02_000')
+                file_group = file_name.stem.rsplit('_window_', 1)[0]
+                self.file_groups.append(file_group)
+
+        self.labels = np.array(self.labels, dtype=np.int64)
+        self.operations = np.array(self.operations)
+        self.file_groups = np.array(self.file_groups)
+        # assert len(self.file_paths) == 6383, f"Expected 6383 files, found {len(self.file_paths)}"  #it was 7501 with 80% overlap of  bad data windows, now it is 50% overlap, so less bad data
+
+
+        # Calculate class weights once during initialization
+        class_counts = np.bincount(self.labels)
+        total = sum(class_counts)
+        self.weights = torch.tensor([total / c for c in class_counts], dtype=torch.float32)
+
+
+    def __len__(self):
+        return len(self.file_paths)
+
+    def __getitem__(self, idx):
+        file_path = self.file_paths[idx]
+        with h5py.File(file_path, "r") as f:
+            data = f["vibration_data"][:]  # Shape (2000, 3)
+
+        data = np.transpose(data, (1, 0))  # Change to (3, 2000) for CNN
+
+        label = self.labels[idx]
+
+        # Augment bad samples by adding noise
+        if self.augment_bad and label == 0:
+            data += np.random.normal(0, 0.25, data.shape)  # Add Gaussian noise
+
+        # Apply transforms if any
+        if self.transform:
+            data = self.transform(data)
+
+
+        return torch.tensor(data, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
 
 def get_layer_names(model: CNN1D_Wide) -> List[str]:
     """Return conv layer names for CRP hooks."""
