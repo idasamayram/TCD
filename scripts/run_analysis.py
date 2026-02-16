@@ -96,14 +96,15 @@ def run_crp_analysis(
         conditions = [{"y": label.item()} for label in labels]
 
         # Compute CRP attribution with layer recording
-        # requires_grad_(True) MUST be called OUTSIDE of no_grad context
         data_with_grad = data.clone().requires_grad_(True)
-        heatmap, _, _, attr = attributor(
+        attr = attributor(
             data_with_grad,
             conditions,
             composite,
             record_layer=layer_names
         )
+        # attr is a namedtuple: (heatmap, activations, relevances, prediction)
+        heatmap = attr.heatmap
 
         # Extract concept relevances per layer
         eps_relevances = {}
@@ -114,22 +115,16 @@ def run_crp_analysis(
                 concept_rel = cc.attribute(layer_rel, abs_norm=True)
                 eps_relevances[layer] = concept_rel.detach().cpu()
 
-        # Store features grouped by class
+        # Store outputs from the attribution result
         for i in range(batch_size_actual):
             class_id = labels[i].item()
 
-            # Store layer features
             for layer in layer_names:
                 if layer in eps_relevances:
                     class_features[class_id][layer].append(eps_relevances[layer][i])
 
-            # Store outputs
-            class_outputs[class_id].append(outputs[i].detach().cpu())
-
-            # Store sample ID
+            class_outputs[class_id].append(attr.prediction[i].detach().cpu())
             class_sample_ids[class_id].append(sample_idx + i)
-
-            # Store heatmap
             class_heatmaps[class_id].append(heatmap[i].detach().cpu().numpy())
 
         sample_idx += batch_size_actual
