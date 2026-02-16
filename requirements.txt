@@ -1,5 +1,6 @@
 torch==2.3.1
 torchvision
+numpy<2
 zennit-crp
 scikit-learn
 scikit-image
