@@ -118,7 +118,7 @@ def run_variant_c(
     features_path: str,
     output_path: str,
     config: dict,
-    layer_name: str = 'features.0'
+    layer_name: str = 'conv1'
 ):
     """
     Run Variant C: Learned cluster concepts.
@@ -262,8 +262,8 @@ def main():
                        help='Path to CRP features directory from run_analysis.py')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for concept results')
-    parser.add_argument('--layer', type=str, default='features.0',
-                       help='Layer to use for Variant C (default: features.0)')
+    parser.add_argument('--layer', type=str, default='conv1',
+                       help='Layer to use for Variant C (default: conv1)')
     
     args = parser.parse_args()
     

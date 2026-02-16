@@ -66,7 +66,7 @@ class LearnedClusterTCD:
     def __init__(
         self,
         n_prototypes: int = 4,
-        layer_name: str = 'features.0',
+        layer_name: str = 'conv1',
         covariance_type: str = 'full',
         n_init: int = 1,
         max_iter: int = 10

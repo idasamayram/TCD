@@ -103,7 +103,7 @@ def compute_intervention_effect(
         model: PyTorch model
         data: Input data of shape (B, C, T)
         target: Target class
-        layer_name: Layer to intervene on (e.g., 'features.0')
+        layer_name: Layer to intervene on (e.g., 'conv1', 'conv2')
         concept_indices: Concepts to intervene on
         method: Intervention method
         factor: Scaling factor
@@ -245,7 +245,7 @@ if __name__ == "__main__":
         model=model,
         data=x,
         target=target,
-        layer_name='features.0',
+        layer_name='conv1',
         concept_indices=[0, 1],
         method='suppress'
     )

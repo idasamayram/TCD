@@ -13,8 +13,8 @@ data:
   class_names: ["OK", "NOK"]
 
 analysis:
-  layers: ["features.0", "features.3", "features.6"]  # Conv layer names for CRP
-  composite: "epsilon_plus"  # LRP composite rule
+  layers: ["conv1", "conv2", "conv3", "conv4"]  # Conv layer names for CRP (flat attributes)
+  composite: "epsilon_plus"  # LRP composite rule (no canonizers needed - no BatchNorm)
   batch_size: 32
 
 tcd:
@@ -35,7 +35,7 @@ tcd:
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "features.0"
+  target_layer: "conv1"
   concept_indices: []  # leave empty to auto-select
 
 output:
