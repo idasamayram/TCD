@@ -3,11 +3,12 @@ LRP composite rules for 1D convolutional networks.
 
 Adapted from pcx_codes/utils/lrp_composites.py for Conv1d.
 Uses zennit.types.Convolution (covers both Conv1d and Conv2d).
+No canonizers needed since CNN1D_Wide has no BatchNorm/GroupNorm.
 """
 
 import torch
 import torch.nn as nn
-from zennit.composites import LayerMapComposite
+from zennit.composites import LayerMapComposite, EpsilonPlusFlat as ZennitEpsilonPlusFlat
 from zennit.rules import Epsilon, ZPlus, Flat, Pass
 from zennit.types import Convolution, Linear, AvgPool, Activation
 from typing import Dict, Callable
@@ -24,52 +25,14 @@ def get_composite(name: str = 'epsilon_plus') -> LayerMapComposite:
         LayerMapComposite for use with CondAttribution
     """
     if name == 'epsilon_plus':
-        return EpsilonPlusFlat()
+        # Use zennit's built-in EpsilonPlusFlat (no canonizers needed)
+        return ZennitEpsilonPlusFlat(canonizers=None)
     elif name == 'epsilon':
         return EpsilonComposite()
     elif name == 'gradient':
         return GradientComposite()
     else:
         raise ValueError(f"Unknown composite: {name}")
-
-
-class EpsilonPlusFlat(LayerMapComposite):
-    """
-    LRP-ε+ composite with flat rule for first layer.
-    
-    From PCX paper: Use ε-rule (Epsilon) at intermediate layers
-    for stable concept relevance, with ZPlus for first layer inputs
-    and Flat for final classifier.
-    
-    Layer mapping:
-    - Input convolutions: ZPlus (handles positive/negative contributions)
-    - Hidden convolutions: Epsilon (stabilized division)
-    - Linear layers: Flat (uniform relevance distribution)
-    - Pooling/activations: Pass (no modification)
-    """
-    
-    def __init__(self, epsilon: float = 1e-6, first_layer_zplus: bool = True):
-        """
-        Initialize composite.
-        
-        Args:
-            epsilon: Stabilizer for Epsilon rule
-            first_layer_zplus: If True, use ZPlus for first conv, else Epsilon
-        """
-        self.epsilon = epsilon
-        self.first_layer_zplus = first_layer_zplus
-        
-        layer_map = [
-            (Activation, Pass()),
-            (AvgPool, Pass()),
-            (Linear, Flat()),
-            (Convolution, Epsilon(epsilon=epsilon)),
-        ]
-        
-        # First layer gets ZPlus if requested
-        first_map = [(Convolution, ZPlus())] if first_layer_zplus else []
-        
-        super().__init__(layer_map=layer_map, first_map=first_map)
 
 
 class EpsilonComposite(LayerMapComposite):
@@ -94,7 +57,7 @@ class EpsilonComposite(LayerMapComposite):
             (Convolution, Epsilon(epsilon=epsilon)),
         ]
         
-        super().__init__(layer_map=layer_map)
+        super().__init__(layer_map=layer_map, canonizers=None)
 
 
 class GradientComposite(LayerMapComposite):
@@ -114,7 +77,7 @@ class GradientComposite(LayerMapComposite):
             (Convolution, Pass()),
         ]
         
-        super().__init__(layer_map=layer_map)
+        super().__init__(layer_map=layer_map, canonizers=None)
 
 
 def test_composite():
