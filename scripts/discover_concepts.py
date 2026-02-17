@@ -96,9 +96,11 @@ def run_variant_a(
         tcd = WindowConceptTCD(
             n_concepts=n_concepts,
             window_size=window_config.get('window_size', 40),
-            n_top_windows=window_config.get('n_top_windows', 20),
+            n_top_windows=window_config.get('n_top_windows', None),  # None = adaptive
+            threshold_factor=window_config.get('threshold_factor', 1.0),
             sample_rate=sample_rate,
-            features=window_config.get('features', None),
+            features=window_config.get('features', None),  # None = use all features
+            use_raw_signal=window_config.get('use_raw_signal', False),
             gmm_covariance=window_config.get('gmm_covariance', 'full'),
             gmm_n_init=window_config.get('gmm_n_init', 10),
             gmm_max_iter=window_config.get('gmm_max_iter', 100)
@@ -106,8 +108,13 @@ def run_variant_a(
         
         print(f"\nWindow-based concept discovery with {n_concepts} concepts")
         print(f"  Window size: {tcd.window_size} timesteps")
-        print(f"  Top windows per sample: {tcd.n_top_windows}")
-        print(f"  Features: {tcd.features}")
+        if tcd.n_top_windows is None:
+            print(f"  Adaptive threshold mode (threshold_factor={tcd.threshold_factor})")
+        else:
+            print(f"  Top windows per sample: {tcd.n_top_windows}")
+        print(f"  Use raw signal: {tcd.use_raw_signal}")
+        print(f"  Number of features: {len(tcd.features)}")
+        print(f"  Features: {', '.join(tcd.features[:5])}{'...' if len(tcd.features) > 5 else ''}")
         
         # Fit GMM on training data
         print("\nFitting GMM to discover concepts...")

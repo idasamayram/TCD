@@ -290,9 +290,11 @@ class WindowConceptTCD:
         self,
         n_concepts: int = 6,
         window_size: int = 40,  # timesteps (0.1s at 400Hz)
-        n_top_windows: int = 20,  # windows to extract per sample
+        n_top_windows: Optional[int] = 20,  # windows to extract per sample, None = adaptive
+        threshold_factor: float = 1.0,  # For adaptive mode: keep windows with relevance > mean + threshold_factor*std
         sample_rate: int = 400,  # Hz
         features: Optional[List[str]] = None,
+        use_raw_signal: bool = False,  # Extract features from raw signals at important positions
         gmm_covariance: str = 'full',
         gmm_n_init: int = 10,
         gmm_max_iter: int = 100,
@@ -304,9 +306,13 @@ class WindowConceptTCD:
         Args:
             n_concepts: Number of concepts to discover via GMM
             window_size: Size of time windows in timesteps
-            n_top_windows: Number of top windows to extract per sample
+            n_top_windows: Number of top windows to extract per sample. 
+                          If None, uses adaptive threshold mode.
+            threshold_factor: For adaptive mode, keeps windows with 
+                             relevance > mean + threshold_factor*std
             sample_rate: Sampling rate in Hz
-            features: List of feature names to extract (default: all)
+            features: List of feature names to extract (default: all available)
+            use_raw_signal: If True, extract features from raw signals at important windows
             gmm_covariance: GMM covariance type
             gmm_n_init: Number of GMM initializations
             gmm_max_iter: Max GMM iterations
@@ -317,15 +323,27 @@ class WindowConceptTCD:
         self.n_concepts = n_concepts
         self.window_size = window_size
         self.n_top_windows = n_top_windows
+        self.threshold_factor = threshold_factor
         self.sample_rate = sample_rate
+        self.use_raw_signal = use_raw_signal
         self.random_state = random_state
         
-        # Default features if not specified
+        # Default features if not specified - includes all CNC thesis features
         if features is None:
             features = [
-                'rms', 'peak_freq', 'crest_factor', 'kurtosis',
-                'zero_crossing_rate', 'spectral_energy', 'spectral_centroid',
-                'mean_amplitude', 'std_amplitude', 'max_amplitude'
+                # Time-domain features (existing)
+                'rms', 'mean_amplitude', 'std_amplitude', 'max_amplitude',
+                'crest_factor', 'kurtosis', 'zero_crossing_rate',
+                # CNC thesis time-domain features (new)
+                'skewness',
+                # Frequency-domain features (existing)
+                'peak_freq', 'spectral_energy', 'spectral_centroid',
+                # CNC thesis frequency-domain features (new)
+                'spectral_flatness', 'phase_std',
+                # Vibration-specific features (new)
+                'envelope_rms', 'envelope_peak',
+                'band_energy_ratio',
+                'harmonic_noise_ratio'
             ]
         self.features = features
         
@@ -394,12 +412,29 @@ class WindowConceptTCD:
                 window_importances.append(window_imp)
                 window_starts.append(start)
             
-            # Get top-K windows
-            top_k = min(self.n_top_windows, len(window_importances))
-            if top_k == 0:
-                top_k = 1  # At least one window
-            
-            top_indices = np.argsort(window_importances)[-top_k:]
+            # Get top-K windows or use adaptive threshold
+            if self.n_top_windows is None:
+                # Adaptive threshold mode: keep windows with relevance > mean + threshold_factor*std
+                window_importances_array = np.array(window_importances)
+                mean_importance = window_importances_array.mean()
+                std_importance = window_importances_array.std()
+                threshold = mean_importance + self.threshold_factor * std_importance
+                
+                # Get windows exceeding threshold
+                top_indices = np.where(window_importances_array >= threshold)[0]
+                
+                # Ensure at least one window (the most important)
+                if len(top_indices) == 0:
+                    top_indices = np.array([np.argmax(window_importances)])
+                
+                top_k = len(top_indices)
+            else:
+                # Fixed top-K mode
+                top_k = min(self.n_top_windows, len(window_importances))
+                if top_k == 0:
+                    top_k = 1  # At least one window
+                
+                top_indices = np.argsort(window_importances)[-top_k:]
             
             for idx in top_indices:
                 start = window_starts[idx]
@@ -436,10 +471,12 @@ class WindowConceptTCD:
         feature_list = []
         
         for window in windows:
-            # Average across channels
+            # Average across channels for single-channel features
             signal = window.mean(axis=0)  # (window_size,)
             
             features = {}
+            
+            # ===== TIME-DOMAIN FEATURES =====
             
             # RMS amplitude (overall vibration energy)
             if 'rms' in self.features:
@@ -463,28 +500,97 @@ class WindowConceptTCD:
             if 'kurtosis' in self.features:
                 features['kurtosis'] = stats.kurtosis(signal)
             
+            # Skewness (asymmetry) - CNC thesis feature
+            if 'skewness' in self.features:
+                features['skewness'] = stats.skew(signal)
+            
             # Zero crossing rate
             if 'zero_crossing_rate' in self.features:
                 zero_crossings = np.sum(np.diff(np.sign(signal)) != 0)
                 features['zero_crossing_rate'] = zero_crossings / len(signal)
             
-            # Frequency-domain features
-            fft_vals = np.abs(rfft(signal))
+            # ===== FREQUENCY-DOMAIN FEATURES =====
+            
+            fft_vals = rfft(signal)
+            fft_magnitude = np.abs(fft_vals)
+            fft_phase = np.angle(fft_vals)
             freqs = rfftfreq(window_size, d=1/self.sample_rate)
             
             # Peak frequency
             if 'peak_freq' in self.features:
-                peak_idx = np.argmax(fft_vals)
+                peak_idx = np.argmax(fft_magnitude)
                 features['peak_freq'] = freqs[peak_idx]
             
             # Spectral energy
             if 'spectral_energy' in self.features:
-                features['spectral_energy'] = np.sum(fft_vals**2)
+                features['spectral_energy'] = np.sum(fft_magnitude**2)
             
             # Spectral centroid
             if 'spectral_centroid' in self.features:
-                spectral_centroid = np.sum(freqs * fft_vals) / (np.sum(fft_vals) + 1e-6)
+                spectral_centroid = np.sum(freqs * fft_magnitude) / (np.sum(fft_magnitude) + 1e-6)
                 features['spectral_centroid'] = spectral_centroid
+            
+            # Spectral flatness (CNC thesis feature)
+            if 'spectral_flatness' in self.features:
+                geometric_mean = np.exp(np.mean(np.log(fft_magnitude + 1e-10)))
+                arithmetic_mean = np.mean(fft_magnitude)
+                features['spectral_flatness'] = geometric_mean / (arithmetic_mean + 1e-10)
+            
+            # Phase standard deviation (CNC thesis feature)
+            if 'phase_std' in self.features:
+                # Use circular statistics for phase
+                features['phase_std'] = stats.circstd(fft_phase)
+            
+            # ===== VIBRATION-SPECIFIC FEATURES =====
+            
+            # Envelope analysis features (bearing fault detection)
+            if 'envelope_rms' in self.features or 'envelope_peak' in self.features:
+                from scipy.signal import hilbert
+                analytic_signal = hilbert(signal)
+                envelope = np.abs(analytic_signal)
+                
+                if 'envelope_rms' in self.features:
+                    features['envelope_rms'] = np.sqrt(np.mean(envelope**2))
+                if 'envelope_peak' in self.features:
+                    features['envelope_peak'] = np.max(envelope)
+            
+            # Band energy ratio (fault band vs total)
+            if 'band_energy_ratio' in self.features:
+                # Define fault characteristic band (100-200 Hz for typical CNC)
+                fault_band_mask = (freqs >= 100) & (freqs < 200)
+                fault_band_energy = np.sum(fft_magnitude[fault_band_mask]**2)
+                total_energy = np.sum(fft_magnitude**2) + 1e-10
+                features['band_energy_ratio'] = fault_band_energy / total_energy
+            
+            # Harmonic-to-noise ratio (machine health indicator)
+            if 'harmonic_noise_ratio' in self.features:
+                # Find dominant frequency and its harmonics
+                peak_idx = np.argmax(fft_magnitude)
+                fundamental_freq = freqs[peak_idx]
+                
+                # Sum energy at fundamental and first 3 harmonics
+                harmonic_energy = 0
+                for h in range(1, 4):
+                    harmonic_freq = h * fundamental_freq
+                    # Find closest frequency bin
+                    harmonic_idx = np.argmin(np.abs(freqs - harmonic_freq))
+                    if harmonic_idx < len(fft_magnitude):
+                        harmonic_energy += fft_magnitude[harmonic_idx]**2
+                
+                # Noise is total energy minus harmonic energy
+                total_energy = np.sum(fft_magnitude**2)
+                noise_energy = total_energy - harmonic_energy + 1e-10
+                features['harmonic_noise_ratio'] = harmonic_energy / noise_energy
+            
+            # Inter-axis correlation (if multi-channel available)
+            # Note: This is computed per window, averaging across channel pairs
+            if 'inter_axis_corr' in self.features and n_channels >= 2:
+                correlations = []
+                for i in range(n_channels):
+                    for j in range(i+1, n_channels):
+                        corr = np.corrcoef(window[i], window[j])[0, 1]
+                        correlations.append(corr)
+                features['inter_axis_corr'] = np.mean(correlations) if correlations else 0.0
             
             # Construct feature vector in consistent order
             feature_vec = [features[f] for f in self.features if f in features]

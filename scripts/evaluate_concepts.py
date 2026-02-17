@@ -139,6 +139,26 @@ def evaluate_variant_a(
         print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f}")
     print("-"*65 + "\n")
     
+    # Compute class-weighted metrics if class weights are available
+    if hasattr(dataset, 'weights'):
+        class_weights = dataset.weights.cpu().numpy()
+        print(f"\nComputing class-weighted averages with weights: {class_weights}")
+        
+        # Weighted stability
+        stability_weighted = (stability_class_0 * class_weights[0] + 
+                             stability_class_1 * class_weights[1]) / (class_weights[0] + class_weights[1])
+        
+        # Weighted purity
+        purity_weighted = (purity_class_0 * class_weights[0] + 
+                          purity_class_1 * class_weights[1]) / (class_weights[0] + class_weights[1])
+        
+        print(f"\nClass-Weighted Metrics:")
+        print(f"  Stability (weighted): {stability_weighted:.3f}")
+        print(f"  Purity (weighted):    {purity_weighted:.3f}")
+    else:
+        stability_weighted = None
+        purity_weighted = None
+    
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
     evaluation = {
@@ -151,7 +171,9 @@ def evaluate_variant_a(
         'purity_class_0': purity_class_0,
         'purity_class_1': purity_class_1,
         'importance_class_0': importance_class_0,
-        'importance_class_1': importance_class_1
+        'importance_class_1': importance_class_1,
+        'stability_weighted': stability_weighted,
+        'purity_weighted': purity_weighted
     }
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:

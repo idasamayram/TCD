@@ -156,13 +156,43 @@ def compute_prototype_coverage(
     }
 
 
+def compute_class_weighted_average(
+    per_class_values: Dict[int, float],
+    class_weights: Optional[np.ndarray] = None
+) -> float:
+    """
+    Compute class-weighted average of per-class metric values.
+    
+    Args:
+        per_class_values: Dictionary mapping class_id -> metric value
+        class_weights: Optional class weights array. If None, uses uniform weights.
+        
+    Returns:
+        Weighted average of metric values
+    """
+    if class_weights is None:
+        # Uniform weights
+        return np.mean(list(per_class_values.values()))
+    
+    # Apply class weights
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for class_id, value in per_class_values.items():
+        weight = class_weights[class_id]
+        weighted_sum += value * weight
+        total_weight += weight
+    
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+
 def evaluate_concept_quality(
     concept_vectors: np.ndarray,
     labels: np.ndarray,
     importance_scores: np.ndarray,
     intervention_effects: np.ndarray,
     prototype_assignments: Optional[np.ndarray] = None,
-    n_prototypes: Optional[int] = None
+    n_prototypes: Optional[int] = None,
+    class_weights: Optional[np.ndarray] = None
 ) -> Dict[str, float]:
     """
     Comprehensive evaluation of concept quality.
@@ -174,25 +204,65 @@ def evaluate_concept_quality(
         intervention_effects: Intervention effects per concept
         prototype_assignments: Optional prototype assignments
         n_prototypes: Number of prototypes (required if assignments provided)
+        class_weights: Optional class weights for computing weighted averages
         
     Returns:
-        Dictionary of evaluation metrics
+        Dictionary of evaluation metrics including per-class and weighted averages
     """
     metrics = {}
     
-    # Faithfulness
+    # Overall metrics (computed on all samples)
     metrics['faithfulness'] = compute_faithfulness(importance_scores, intervention_effects)
-    
-    # Stability
     metrics['stability'] = compute_stability(concept_vectors, labels)
-    
-    # Concept purity
     metrics['purity'] = compute_concept_purity(concept_vectors)
     
     # Prototype coverage (if applicable)
     if prototype_assignments is not None and n_prototypes is not None:
         coverage_metrics = compute_prototype_coverage(prototype_assignments, n_prototypes)
         metrics.update(coverage_metrics)
+    
+    # Compute per-class metrics
+    unique_classes = np.unique(labels)
+    per_class_metrics = {}
+    
+    for class_id in unique_classes:
+        class_mask = labels == class_id
+        class_concept_vectors = concept_vectors[class_mask]
+        class_labels = labels[class_mask]
+        
+        if len(class_concept_vectors) > 0:
+            per_class_metrics[class_id] = {
+                'stability': compute_stability(class_concept_vectors, class_labels),
+                'purity': compute_concept_purity(class_concept_vectors)
+            }
+            
+            # Per-class prototype coverage if applicable
+            if prototype_assignments is not None and n_prototypes is not None:
+                class_assignments = prototype_assignments[class_mask]
+                class_coverage = compute_prototype_coverage(class_assignments, n_prototypes)
+                per_class_metrics[class_id].update(class_coverage)
+    
+    # Store per-class metrics in the main metrics dict
+    for class_id, class_metrics in per_class_metrics.items():
+        for metric_name, value in class_metrics.items():
+            metrics[f'{metric_name}_class_{class_id}'] = value
+    
+    # Compute class-weighted averages if weights provided
+    if class_weights is not None and len(per_class_metrics) > 0:
+        # Weighted stability
+        stability_per_class = {cid: m['stability'] for cid, m in per_class_metrics.items()}
+        metrics['stability_weighted'] = compute_class_weighted_average(stability_per_class, class_weights)
+        
+        # Weighted purity
+        purity_per_class = {cid: m['purity'] for cid, m in per_class_metrics.items()}
+        metrics['purity_weighted'] = compute_class_weighted_average(purity_per_class, class_weights)
+        
+        # Weighted coverage metrics if available
+        if prototype_assignments is not None and n_prototypes is not None:
+            for metric_name in ['coverage', 'balance', 'max_coverage']:
+                if all(metric_name in m for m in per_class_metrics.values()):
+                    values_per_class = {cid: m[metric_name] for cid, m in per_class_metrics.items()}
+                    metrics[f'{metric_name}_weighted'] = compute_class_weighted_average(values_per_class, class_weights)
     
     return metrics
 
@@ -202,7 +272,7 @@ def print_evaluation_report(metrics: Dict[str, float], per_class_metrics: Dict[s
     Print formatted evaluation report.
     
     Args:
-        metrics: Dictionary of overall evaluation metrics
+        metrics: Dictionary of overall evaluation metrics (includes weighted averages)
         per_class_metrics: Optional dictionary with 'class_0' and 'class_1' keys,
                           each containing a dictionary of per-class metrics
     """
@@ -215,11 +285,24 @@ def print_evaluation_report(metrics: Dict[str, float], per_class_metrics: Dict[s
     print(f"  Stability:     {metrics.get('stability', 0):.3f}  (consistency across neighbors)")
     print(f"  Purity:        {metrics.get('purity', 0):.3f}  (concept distinctiveness)")
     
+    # Show class-weighted metrics if available
+    if 'stability_weighted' in metrics:
+        print("\nClass-Weighted Metrics:")
+        print(f"  Stability (weighted):     {metrics['stability_weighted']:.3f}")
+        print(f"  Purity (weighted):        {metrics['purity_weighted']:.3f}")
+    
     if 'coverage' in metrics:
         print("\nPrototype Metrics:")
         print(f"  Coverage:      {metrics['coverage']:.3f}  (fraction of prototypes used)")
         print(f"  Balance:       {metrics['balance']:.3f}  (assignment distribution)")
         print(f"  Max Coverage:  {metrics['max_coverage']:.3f}  (largest prototype fraction)")
+        
+        # Show weighted prototype metrics if available
+        if 'coverage_weighted' in metrics:
+            print("\n  Weighted Prototype Metrics:")
+            print(f"    Coverage (weighted):      {metrics['coverage_weighted']:.3f}")
+            print(f"    Balance (weighted):       {metrics['balance_weighted']:.3f}")
+            print(f"    Max Coverage (weighted):  {metrics['max_coverage_weighted']:.3f}")
     
     # Print per-class comparison if provided
     if per_class_metrics:
