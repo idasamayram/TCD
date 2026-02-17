@@ -42,7 +42,7 @@ def run_crp_analysis(
     layer_names,
     composite,
     output_path,
-    batch_size=32,
+    batch_size=4,   # CRP needs full backward graph, so keep this very small
     device='cuda' if torch.cuda.is_available() else 'cpu'
 ):
     """
@@ -59,6 +59,7 @@ def run_crp_analysis(
     """
     model.to(device)
     model.eval()
+    print('device in run_crp_analysis:', device)
     
     # Initialize attribution and concept
     attributor = TimeSeriesCondAttribution(model)
@@ -127,7 +128,13 @@ def run_crp_analysis(
             class_sample_ids[class_id].append(sample_idx + i)
             class_heatmaps[class_id].append(heatmap[i].detach().cpu().numpy())
 
+        # After storing all results for this batch...
         sample_idx += batch_size_actual
+
+        # Critical: free the computation graph and cached tensors
+        del attr, heatmap, data_with_grad, eps_relevances
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 
