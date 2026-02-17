@@ -109,7 +109,7 @@ def run_variant_a(
     print("CONCEPT IMPORTANCE (Overall and Per-Class)")
     print("="*60)
     print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
-    print("-"*80)
+    print("-"*84)
     for i, label in enumerate(tcd.get_concept_labels()):
         if importance_class_0[i] > 0:
             ratio = importance_class_1[i] / importance_class_0[i]
@@ -117,7 +117,7 @@ def run_variant_a(
         else:
             ratio_str = "N/A".rjust(15)
         print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
-    print("="*80 + "\n")
+    print("="*84 + "\n")
     
     # Save results
     os.makedirs(output_path, exist_ok=True)
