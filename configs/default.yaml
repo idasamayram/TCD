@@ -30,18 +30,17 @@ tcd:
   # Variant A (new): Window-based concept discovery (data-driven)
   window_concept:
     window_size: 40       # timesteps per window (0.1s at 400Hz)
-    n_top_windows: 20     # top windows to extract per sample
-    features:             # features to extract per window
-      - rms
-      - peak_freq
-      - crest_factor
-      - kurtosis
-      - zero_crossing_rate
-      - spectral_energy
-      - spectral_centroid
-      - mean_amplitude
-      - std_amplitude
-      - max_amplitude
+    n_top_windows: null   # null = use adaptive threshold, or specify number
+    threshold_factor: 1.0  # For adaptive mode: keep windows with relevance > mean + 1.0*std
+    use_raw_signal: false  # Extract features from raw signal at important positions
+    features: null        # null = use ALL available features (maximally automated)
+    # Available features (leave null to use all):
+    #   Time-domain: rms, mean_amplitude, std_amplitude, max_amplitude, crest_factor, 
+    #                kurtosis, skewness, zero_crossing_rate
+    #   Frequency-domain: peak_freq, spectral_energy, spectral_centroid, 
+    #                     spectral_flatness, phase_std
+    #   Vibration-specific: envelope_rms, envelope_peak, band_energy_ratio, 
+    #                       harmonic_noise_ratio, inter_axis_corr
     gmm_covariance: "full"   # GMM covariance type
     gmm_n_init: 10           # GMM initializations
     gmm_max_iter: 100        # GMM max iterations

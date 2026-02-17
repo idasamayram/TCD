@@ -246,6 +246,246 @@ tcd = VibrationFeatureTCD(n_concepts=50, use_feature_selection=True)
 
 ---
 
+## 5. Adaptive Window Selection and Expanded Features (Variant A Enhanced)
+
+### Overview
+The window-based concept discovery (Variant A) has been significantly enhanced with adaptive threshold mode and comprehensive CNC thesis features. This provides maximally automated concept discovery without requiring manual tuning.
+
+### Key Improvements
+1. **Adaptive Threshold Mode**: Automatically selects important windows based on statistical significance
+2. **Expanded Feature Set**: 17+ features including CNC thesis time/frequency/vibration-specific features
+3. **Raw Signal Support**: Optional feature extraction from raw signals (not just heatmaps)
+
+### Configuration
+```yaml
+# configs/default.yaml
+tcd:
+  window_concept:
+    window_size: 40           # timesteps per window (0.1s at 400Hz)
+    n_top_windows: null       # null = adaptive, or specify number like 20
+    threshold_factor: 1.0      # For adaptive: keep windows with relevance > mean + 1.0*std
+    use_raw_signal: false      # Extract features from raw signals at important windows
+    features: null            # null = use ALL features (recommended for automation)
+    gmm_covariance: "full"
+    gmm_n_init: 10
+    gmm_max_iter: 100
+```
+
+### Adaptive vs Fixed Window Selection
+
+#### Adaptive Mode (Recommended for Automation)
+```yaml
+n_top_windows: null          # Enable adaptive mode
+threshold_factor: 1.0        # Controls selectivity (higher = fewer windows)
+```
+
+**How it works:**
+1. Computes mean and std of window relevances across the sample
+2. Keeps windows with `relevance > mean + threshold_factor * std`
+3. Automatically adapts to each sample's relevance distribution
+4. Mimics CNC thesis approach (top 5-10% windows)
+
+**Benefits:**
+- No manual tuning needed
+- Adapts to sample-specific patterns
+- More discriminative (focuses on truly important windows)
+- Better for imbalanced datasets
+
+**Threshold Factor Guide:**
+- `0.5`: Relaxed (keeps ~30% of windows)
+- `1.0`: Balanced (keeps ~15% of windows) - **Default**
+- `1.5`: Strict (keeps ~7% of windows) - Matches CNC thesis
+- `2.0`: Very strict (keeps ~2% of windows)
+
+#### Fixed Mode (Legacy)
+```yaml
+n_top_windows: 20           # Extract exactly 20 windows per sample
+```
+
+**When to use:**
+- Need consistent number of windows per sample
+- Debugging or comparison with previous results
+- Dataset has very sparse relevance patterns
+
+### Expanded Feature Set
+
+#### All Available Features (17 total)
+When `features: null`, automatically includes:
+
+**Time-Domain (8 features)**
+- `rms`: Overall vibration energy
+- `mean_amplitude`, `std_amplitude`, `max_amplitude`: Basic statistics
+- `crest_factor`: Peak/RMS ratio (impulsiveness indicator)
+- `kurtosis`: Spikiness (fault detection)
+- `skewness`: Asymmetry (CNC thesis feature)
+- `zero_crossing_rate`: Frequency proxy
+
+**Frequency-Domain (5 features)**
+- `peak_freq`: Dominant frequency
+- `spectral_energy`: Total frequency energy
+- `spectral_centroid`: Center of mass of spectrum
+- `spectral_flatness`: Tonality vs noise (CNC thesis)
+- `phase_std`: Phase variability (CNC thesis)
+
+**Vibration-Specific (4 features)**
+- `envelope_rms`, `envelope_peak`: Bearing fault detection (CNC thesis)
+- `band_energy_ratio`: Fault band (100-200Hz) vs total energy
+- `harmonic_noise_ratio`: Machine health indicator (CNC thesis)
+
+#### Customizing Features
+```python
+# Use only specific features
+from tcd.variants.filterbank import WindowConceptTCD
+
+tcd = WindowConceptTCD(
+    n_concepts=6,
+    features=['rms', 'crest_factor', 'kurtosis', 'spectral_energy']  # Minimal set
+)
+
+# Or use all features for maximum automation
+tcd = WindowConceptTCD(
+    n_concepts=6,
+    features=None  # Use all 17 features
+)
+```
+
+### Usage Examples
+
+#### Example 1: Fully Automated (Recommended)
+```bash
+# Use adaptive thresholding with all features
+python scripts/discover_concepts.py \
+    --variant A \
+    --window-based \
+    --features results/crp_features \
+    --output results/concepts_A_adaptive \
+    --config configs/default.yaml
+
+# Output shows per-sample window counts (adaptive):
+#   Sample 0: 3 windows selected
+#   Sample 1: 5 windows selected
+#   Sample 2: 2 windows selected
+#   Average: 3.3 windows per sample
+```
+
+#### Example 2: Strict Threshold (CNC Thesis Mode)
+```yaml
+# configs/strict.yaml
+tcd:
+  window_concept:
+    threshold_factor: 1.5    # Stricter selection (~7% of windows)
+```
+
+```bash
+python scripts/discover_concepts.py \
+    --variant A \
+    --window-based \
+    --features results/crp_features \
+    --output results/concepts_A_strict \
+    --config configs/strict.yaml
+```
+
+#### Example 3: Legacy Fixed Mode
+```yaml
+# For comparison with older results
+tcd:
+  window_concept:
+    n_top_windows: 20        # Fixed 20 windows
+    threshold_factor: 1.0     # Ignored in fixed mode
+```
+
+### Raw Signal Feature Extraction (Advanced)
+
+When `use_raw_signal: true`, features are extracted from the **original signal** at important window positions identified by LRP, not just from heatmaps.
+
+```yaml
+tcd:
+  window_concept:
+    use_raw_signal: true     # Enable raw signal features
+```
+
+**Benefits:**
+- More accurate feature values (computed on original data, not attribution)
+- Captures signal properties that may be lost in attribution
+- Better for CNC vibration analysis
+
+**Requirements:**
+- Raw signals must be passed to `fit()` and `extract_concepts()`
+- Increases memory usage (stores raw signals)
+
+```python
+# In code
+from models.cnn1d_model import VibrationDataset
+
+# Load dataset
+dataset = VibrationDataset('./data')
+signals = []
+for i in range(len(dataset)):
+    data, label = dataset[i]
+    signals.append(data)
+signals = torch.stack(signals)
+
+# Fit with raw signals
+tcd.fit(heatmaps, labels=labels, raw_signals=signals)
+
+# Extract with raw signals
+concepts = tcd.extract_concepts(heatmaps, raw_signals=signals)
+```
+
+### Class-Weighted Evaluation
+
+All evaluation metrics now support class-weighted averages to account for imbalanced datasets.
+
+```python
+from tcd.evaluation import evaluate_concept_quality
+from models.cnn1d_model import VibrationDataset
+
+# Load class weights from dataset
+dataset = VibrationDataset('./data')
+class_weights = dataset.weights.cpu().numpy()
+
+# Evaluate with class weights
+metrics = evaluate_concept_quality(
+    concept_vectors,
+    labels,
+    importance_scores,
+    intervention_effects,
+    class_weights=class_weights  # Pass class weights
+)
+
+# Results include both overall and weighted metrics
+print(f"Stability (overall): {metrics['stability']:.3f}")
+print(f"Stability (weighted): {metrics['stability_weighted']:.3f}")
+print(f"Purity (overall): {metrics['purity']:.3f}")
+print(f"Purity (weighted): {metrics['purity_weighted']:.3f}")
+```
+
+**Interpretation:**
+- **Overall metrics**: Simple average across all samples (dominated by majority class)
+- **Weighted metrics**: Class-weighted average (gives more weight to minority class)
+- For imbalanced datasets, weighted metrics are more representative of model quality
+
+### Command-Line Usage Summary
+
+```bash
+# Adaptive window selection with all features (recommended)
+python scripts/discover_concepts.py --variant A --window-based \
+    --features results/crp_features --output results/concepts_adaptive
+
+# Strict threshold (CNC thesis mode - top ~7% windows)
+# Edit config: threshold_factor: 1.5
+python scripts/discover_concepts.py --variant A --window-based \
+    --features results/crp_features --output results/concepts_strict \
+    --config configs/strict.yaml
+
+# Legacy fixed mode (for comparison)
+# Edit config: n_top_windows: 20
+python scripts/discover_concepts.py --variant A --window-based \
+    --features results/crp_features --output results/concepts_fixed
+```
+
+---
+
 ## Integration with Existing Workflow
 
 ### Complete Pipeline Example
