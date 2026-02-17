@@ -206,8 +206,8 @@ def measure_concept_importance(
             mask = labels == target_class
             if mask.sum() == 0:
                 continue
-            
-            data_target = data[mask]
+
+            data_target = data[mask].to(next(model.parameters()).device)
             
             # Measure intervention effect
             result = compute_intervention_effect(
