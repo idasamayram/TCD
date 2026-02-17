@@ -39,9 +39,9 @@ class TemporalPrototypeDiscovery:
     def __init__(
         self,
         n_prototypes: int = 4,
-        covariance_type: str = 'full',
-        n_init: int = 1,
-        max_iter: int = 10,
+        covariance_type: str = 'diag',
+        n_init: int = 5,
+        max_iter: int = 200,
         random_state: int = 0
     ):
         """
@@ -50,8 +50,9 @@ class TemporalPrototypeDiscovery:
         Args:
             n_prototypes: Number of prototypes per class
             covariance_type: GMM covariance type ('full', 'tied', 'diag', 'spherical')
-            n_init: Number of GMM initializations
-            max_iter: Maximum GMM iterations
+                           Default 'diag' is better for high-dimensional data (64+ dims)
+            n_init: Number of GMM initializations (default 5 for better convergence)
+            max_iter: Maximum GMM iterations (default 200 for convergence in 64-dim space)
             random_state: Random seed
         """
         self.n_prototypes = n_prototypes
@@ -317,6 +318,71 @@ class TemporalPrototypeDiscovery:
         ).numpy()
         
         return cosine_sims
+    
+    @staticmethod
+    def select_optimal_n_prototypes(
+        features: torch.Tensor,
+        min_prototypes: int = 2,
+        max_prototypes: int = 10,
+        covariance_type: str = 'diag',
+        n_init: int = 5,
+        max_iter: int = 200,
+        random_state: int = 0,
+        criterion: str = 'bic'
+    ) -> Tuple[int, Dict[int, float]]:
+        """
+        Select optimal number of prototypes using BIC or AIC.
+        
+        This helps avoid hardcoding n_prototypes and instead finds
+        the number that best fits the data.
+        
+        Args:
+            features: Concept relevance vectors of shape (N, n_concepts)
+            min_prototypes: Minimum number of prototypes to try
+            max_prototypes: Maximum number of prototypes to try
+            covariance_type: GMM covariance type
+            n_init: Number of GMM initializations
+            max_iter: Maximum GMM iterations
+            random_state: Random seed
+            criterion: 'bic' (Bayesian Information Criterion) or 'aic' (Akaike IC)
+            
+        Returns:
+            optimal_n: Optimal number of prototypes
+            scores: Dictionary mapping n_prototypes -> BIC/AIC score
+        """
+        features_np = features.cpu().numpy()
+        scores = {}
+        
+        print(f"\nSelecting optimal n_prototypes using {criterion.upper()}...")
+        print(f"Testing range: {min_prototypes} to {max_prototypes}")
+        
+        for n in range(min_prototypes, max_prototypes + 1):
+            gmm = GaussianMixture(
+                n_components=n,
+                covariance_type=covariance_type,
+                n_init=n_init,
+                max_iter=max_iter,
+                random_state=random_state,
+                init_params='kmeans'
+            )
+            
+            gmm.fit(features_np)
+            
+            if criterion == 'bic':
+                score = gmm.bic(features_np)
+            elif criterion == 'aic':
+                score = gmm.aic(features_np)
+            else:
+                raise ValueError(f"Unknown criterion: {criterion}. Use 'bic' or 'aic'")
+            
+            scores[n] = score
+            print(f"  n={n}: {criterion.upper()}={score:.2f}")
+        
+        # Lower BIC/AIC is better
+        optimal_n = min(scores, key=scores.get)
+        print(f"\nOptimal n_prototypes: {optimal_n} ({criterion.upper()}={scores[optimal_n]:.2f})")
+        
+        return optimal_n, scores
 
 
 if __name__ == "__main__":

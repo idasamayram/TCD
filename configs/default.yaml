@@ -19,14 +19,48 @@ analysis:
   use_class_weights: true  # Apply inverse-frequency class weights to concept relevances
 
 tcd:
-  variant: "A"  # A: filterbank/window-based, B: temporal_descriptors, C: learned_clusters, D: vibration_features
-  n_concepts: 6  # Number of concepts for window-based discovery
+  variant: "C"  # PRIMARY: C (CRP-native concepts), A (filterbank/window), B (temporal), D (vibration features)
+  primary_layer: "conv3"  # Layer to use for concept discovery (conv3 has 64 filters)
+  n_concepts: 6  # Number of concepts for window-based discovery (Variant A)
+  
+  # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
+  n_prototypes: 4  # Number of prototypes per class (or use auto_select_n_prototypes)
+  auto_select_n_prototypes: false  # If true, use BIC to select optimal n_prototypes
+  min_prototypes: 2  # Min for auto-selection
+  max_prototypes: 10  # Max for auto-selection
+  top_k_samples: 6  # Top-k samples per prototype for visualization
+  gmm_covariance: "diag"  # Better for high-dimensional (64+ dims): 'diag', 'full', 'tied', 'spherical'
+  gmm_n_init: 5  # Number of GMM initializations (increased from 1 for better convergence)
+  gmm_max_iter: 200  # Maximum GMM iterations (increased from 10 for 64-dim convergence)
+  
+  # Global window analysis (for interpretation)
+  global_windows:
+    window_size: 40  # timesteps per window (0.1s at 400Hz)
+    n_top_positions: 10  # Select top-10 window positions globally (None = use threshold)
+    threshold_factor: 1.5  # For threshold mode: keep windows with importance > mean + factor*std
+    per_class: true  # Find important windows per class
+  
+  # Interpretation features (applied to globally-important windows)
+  interpretation_features:
+    - rms
+    - crest_factor
+    - kurtosis
+    - skewness
+    - peak_freq
+    - spectral_energy
+    - zero_crossing_rate
+    - envelope_rms
+    - inter_axis_corr
+    - band_energy_ratio
+    - spectral_flatness
+  
   # Variant A (legacy): Frequency bands in Hz (physics-informed for fault detection)
   filterbank_bands: 
     - [0, 10]     # Normal operation signatures
     - [10, 50]    # Transition band
     - [50, 100]   # Mid-frequency
     - [100, 200]  # Fault signatures (~150Hz)
+  
   # Variant A (new): Window-based concept discovery (data-driven)
   window_concept:
     window_size: 40       # timesteps per window (0.1s at 400Hz)
@@ -44,22 +78,17 @@ tcd:
     gmm_covariance: "full"   # GMM covariance type
     gmm_n_init: 10           # GMM initializations
     gmm_max_iter: 100        # GMM max iterations
-  # Variant C: GMM prototypes
-  n_prototypes: 4
-  top_k_samples: 6
-  gmm_covariance: "full"
-  gmm_n_init: 1
-  gmm_max_iter: 10
-  # Variant D: Vibration features
+  
+  # Variant D: Vibration features (for interpretation, not concept definition)
   vibration_features:
     window_size: 100         # Window size for feature extraction
     n_concepts: 30           # Number of top features to select (null = use all)
     use_feature_selection: true
     selection_method: "mutual_info"  # 'mutual_info' or 'fisher'
     n_prototypes: 4
-    gmm_covariance: "full"
-    gmm_n_init: 10
-    gmm_max_iter: 100
+    gmm_covariance: "diag"
+    gmm_n_init: 5
+    gmm_max_iter: 200
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
