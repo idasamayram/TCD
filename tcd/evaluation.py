@@ -242,10 +242,16 @@ def print_evaluation_report(metrics: Dict[str, float], per_class_metrics: Dict[s
         # Prototype metrics if available
         if 'coverage' in class_0_metrics or 'coverage' in class_1_metrics:
             print()
+            # Use a mapping for consistent display names
+            metric_display_names = {
+                'coverage': 'Coverage:',
+                'balance': 'Balance:',
+                'max_coverage': 'Max Coverage:'
+            }
             for metric_name in ['coverage', 'balance', 'max_coverage']:
                 val_0 = class_0_metrics.get(metric_name, 0)
                 val_1 = class_1_metrics.get(metric_name, 0)
-                display_name = metric_name.replace('_', ' ').title() + ':'
+                display_name = metric_display_names[metric_name]
                 print(f"{display_name:<20} {val_0:>19.3f} {val_1:>19.3f}")
     
     print("="*60 + "\n")

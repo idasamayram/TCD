@@ -124,8 +124,16 @@ def evaluate_variant_a(
     print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15}")
     print("-"*65)
     
-    importance_class_0 = concept_relevances_class_0.mean(dim=0).numpy()
-    importance_class_1 = concept_relevances_class_1.mean(dim=0).numpy()
+    # Compute per-class importance (handle empty tensors)
+    if len(concept_relevances_class_0) > 0:
+        importance_class_0 = concept_relevances_class_0.mean(dim=0).numpy()
+    else:
+        importance_class_0 = np.zeros_like(importance)
+    
+    if len(concept_relevances_class_1) > 0:
+        importance_class_1 = concept_relevances_class_1.mean(dim=0).numpy()
+    else:
+        importance_class_1 = np.zeros_like(importance)
     
     for i, label in enumerate(results['concept_labels']):
         print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f}")
