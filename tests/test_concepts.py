@@ -26,8 +26,11 @@ def test_channel_concept():
     assert concept_rel.shape == (4, 16), \
         f"Expected shape (4, 16), got {concept_rel.shape}"
     
-    # All values should be non-negative (abs_norm=True)
-    assert (concept_rel >= 0).all(), "Expected non-negative values with abs_norm=True"
+    # With abs_norm=True, values are normalized (sum of abs values = 1 per batch)
+    # Values can still be negative (relevance sign is preserved)
+    abs_sums = concept_rel.abs().sum(dim=1)
+    assert torch.allclose(abs_sums, torch.ones(4), atol=1e-6), \
+        f"Expected normalized values (sum of abs = 1), got sums: {abs_sums}"
     
     print("✓ ChannelConcept test passed")
 

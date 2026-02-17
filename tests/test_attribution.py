@@ -27,11 +27,11 @@ def test_heatmap_shape_preservation():
     
     # Compute heatmap
     conditions = [{"y": 0}, {"y": 1}]
-    heatmap, _, _, _ = attributor(x, conditions, composite)
+    result = attributor(x, conditions, composite)
     
     # Verify shape preservation
-    assert heatmap.shape == (2, 3, 2000), \
-        f"Expected shape (2, 3, 2000), got {heatmap.shape}"
+    assert result.heatmap.shape == (2, 3, 2000), \
+        f"Expected shape (2, 3, 2000), got {result.heatmap.shape}"
     
     print("✓ Heatmap shape preservation test passed")
 
@@ -47,12 +47,12 @@ def test_heatmap_gradient_flow():
     composite = get_composite('epsilon_plus')
     
     conditions = [{"y": 0}]
-    heatmap, _, _, _ = attributor(x, conditions, composite)
+    result = attributor(x, conditions, composite)
     
     # Heatmap should be computed from gradients
-    assert heatmap is not None
-    assert heatmap.shape == x.shape
-    assert not heatmap.requires_grad  # Should be detached
+    assert result.heatmap is not None
+    assert result.heatmap.shape == x.shape
+    assert not result.heatmap.requires_grad  # Should be detached
     
     print("✓ Gradient flow test passed")
 
@@ -71,7 +71,7 @@ def test_attribution_with_layer_recording():
     layer_names = ['conv1', 'conv2', 'conv3']
     conditions = [{"y": 0}, {"y": 0}]
     
-    heatmap, _, _, attr = attributor(
+    result = attributor(
         x, 
         conditions, 
         composite,
@@ -79,12 +79,12 @@ def test_attribution_with_layer_recording():
     )
     
     # Verify layer relevances are recorded
-    assert hasattr(attr, 'relevances')
-    assert all(layer in attr.relevances for layer in layer_names)
+    assert hasattr(result, 'relevances')
+    assert all(layer in result.relevances for layer in layer_names)
     
     # Check shapes of layer relevances
     for layer in layer_names:
-        rel = attr.relevances[layer]
+        rel = result.relevances[layer]
         assert rel.shape[0] == 2  # Batch size
         assert rel.ndim == 3  # (batch, channels, timesteps)
         print(f"Layer {layer} relevance shape: {rel.shape}")
@@ -101,11 +101,11 @@ def test_different_composites():
     attributor = TimeSeriesCondAttribution(model)
     conditions = [{"y": 0}]
     
-    for composite_name in ['epsilon_plus', 'epsilon', 'gradient']:
+    for composite_name in ['epsilon_plus', 'custom_cnn1d']:
         composite = get_composite(composite_name)
-        heatmap, _, _, _ = attributor(x, conditions, composite)
+        result = attributor(x, conditions, composite)
         
-        assert heatmap.shape == (1, 3, 2000), \
+        assert result.heatmap.shape == (1, 3, 2000), \
             f"Composite {composite_name} failed shape check"
         
         print(f"✓ Composite {composite_name} works correctly")
@@ -126,11 +126,11 @@ def test_batch_consistency():
     
     # Same conditions for all
     conditions = [{"y": 0}, {"y": 0}, {"y": 0}]
-    heatmap, _, _, _ = attributor(x_batch, conditions, composite)
+    result = attributor(x_batch, conditions, composite)
     
     # Heatmaps should be similar (allowing for numerical differences)
     for i in range(1, 3):
-        diff = (heatmap[0] - heatmap[i]).abs().mean()
+        diff = (result.heatmap[0] - result.heatmap[i]).abs().mean()
         assert diff < 1e-5, f"Batch inconsistency: diff = {diff}"
     
     print("✓ Batch consistency test passed")
