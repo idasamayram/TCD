@@ -189,7 +189,8 @@ def run_variant_c(
     features_path: str,
     output_path: str,
     config: dict,
-    layer_name: str = 'conv3'  # Use conv3 for richer concept space
+    layer_name: str = 'conv3',  # Use conv3 for richer concept space
+    data_path: str = None  # Path to dataset for loading class weights
 ):
     """
     Run Variant C: Learned cluster concepts.
@@ -199,6 +200,7 @@ def run_variant_c(
         output_path: Output directory
         config: Configuration dict
         layer_name: Layer to use for concepts
+        data_path: Path to dataset for loading class weights (optional)
     """
     print("\n" + "="*60)
     print("VARIANT C: Learned Cluster / PCX-Style Concepts")
@@ -243,13 +245,24 @@ def run_variant_c(
     print(f"\nTotal features: {features.shape}")
     print(f"Feature dimension (n_concepts): {features.shape[1]}")
     
+    # Load class weights if data path provided and use_class_weights is enabled
+    class_weights = None
+    if data_path and config['analysis'].get('use_class_weights', False):
+        from models.cnn1d_model import VibrationDataset
+        if os.path.exists(data_path):
+            temp_dataset = VibrationDataset(data_path)
+            class_weights = temp_dataset.weights
+            print(f"Loaded class weights from dataset: {class_weights.numpy()}")
+        else:
+            print(f"Warning: Data path {data_path} not found, cannot load class weights")
+    
     # Initialize LearnedClusterTCD
     n_prototypes = config['tcd']['n_prototypes']
     tcd = LearnedClusterTCD(n_prototypes=n_prototypes, layer_name=layer_name)
     
     # Fit GMM prototypes
     print(f"\nFitting {n_prototypes} prototypes per class...")
-    tcd.fit(features, labels, outputs)
+    tcd.fit(features, labels, outputs, class_weights=class_weights)
     
     # Analyze prototypes per class
     for class_id in [0, 1]:
@@ -337,11 +350,16 @@ def main():
                        help='Layer to use for Variant C (default: conv3)')
     parser.add_argument('--window-based', action='store_true',
                        help='Use window-based concept discovery for Variant A (default: filterbank)')
+    parser.add_argument('--data', type=str, default=None,
+                       help='Path to data directory (for loading class weights in Variant C)')
     
     args = parser.parse_args()
     
     # Load config
     config = load_config(args.config)
+    
+    # Get data path from args or config
+    data_path = args.data or config.get('data', {}).get('path', None)
     
     # Run appropriate variant
     if args.variant == 'A':
@@ -349,7 +367,7 @@ def main():
     elif args.variant == 'B':
         run_variant_b(args.features, args.output, config)
     elif args.variant == 'C':
-        run_variant_c(args.features, args.output, config, layer_name=args.layer)
+        run_variant_c(args.features, args.output, config, layer_name=args.layer, data_path=data_path)
 
 
 if __name__ == "__main__":

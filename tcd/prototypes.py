@@ -69,7 +69,8 @@ class TemporalPrototypeDiscovery:
         features: torch.Tensor,
         labels: torch.Tensor,
         outputs: torch.Tensor,
-        sample_ids: Optional[np.ndarray] = None
+        sample_ids: Optional[np.ndarray] = None,
+        class_weights: Optional[torch.Tensor] = None
     ):
         """
         Fit GMM prototypes per class.
@@ -82,6 +83,8 @@ class TemporalPrototypeDiscovery:
             labels: True labels of shape (N,)
             outputs: Model output logits of shape (N, n_classes)
             sample_ids: Optional sample identifiers of shape (N,)
+            class_weights: Optional class weights for sample weighting (shape: n_classes)
+                When provided, minority class samples are given higher weight during GMM fitting
         """
         # Get predictions
         predictions = outputs.argmax(dim=1)
@@ -104,6 +107,24 @@ class TemporalPrototypeDiscovery:
             if sample_ids is not None:
                 self.class_sample_ids[class_id] = sample_ids[mask.cpu().numpy()]
             
+            # Handle class weights via oversampling (sklearn GMM doesn't support sample_weights)
+            features_for_gmm = class_features.cpu().numpy()
+            if class_weights is not None and class_weights[class_id] > 1.0:
+                # For minority classes (weight > 1), oversample to balance influence
+                weight = class_weights[class_id].item()
+                # Round to nearest integer for oversampling factor
+                oversample_factor = max(1, int(round(weight)))
+                if oversample_factor > 1:
+                    # Replicate samples with slight jitter to avoid exact duplicates
+                    n_samples = features_for_gmm.shape[0]
+                    oversampled = [features_for_gmm]
+                    for _ in range(oversample_factor - 1):
+                        # Add small noise to avoid identical samples
+                        jittered = features_for_gmm + np.random.normal(0, 1e-5, features_for_gmm.shape)
+                        oversampled.append(jittered)
+                    features_for_gmm = np.concatenate(oversampled, axis=0)
+                    print(f"Class {class_id}: Oversampled by {oversample_factor}x due to class weight {weight:.2f}")
+            
             # Fit GMM
             gmm = GaussianMixture(
                 n_components=self.n_prototypes,
@@ -115,7 +136,7 @@ class TemporalPrototypeDiscovery:
                 verbose=2
             )
             
-            gmm.fit(class_features.cpu().numpy())
+            gmm.fit(features_for_gmm)
             self.gmms[class_id] = gmm
             
             print(f"Class {class_id}: Fitted GMM with {self.n_prototypes} prototypes "

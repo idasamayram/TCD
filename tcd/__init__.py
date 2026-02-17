@@ -2,7 +2,7 @@
 
 from .attribution import TimeSeriesCondAttribution
 from .concepts import ChannelConcept, FilterBankConcept
-from .composites import get_composite, EpsilonComposite, GradientComposite
+from .composites import get_composite, EpsilonComposite, GradientComposite, CNCValidatedComposite
 from .prototypes import TemporalPrototypeDiscovery
 from .intervention import ConceptInterventionHook, compute_intervention_effect, measure_concept_importance
 from .evaluation import evaluate_concept_quality, compute_faithfulness, compute_stability, compute_concept_purity
@@ -22,6 +22,7 @@ __all__ = [
     'get_composite',
     'EpsilonComposite',
     'GradientComposite',
+    'CNCValidatedComposite',
     
     # Prototypes
     'TemporalPrototypeDiscovery',

@@ -14,8 +14,9 @@ data:
 
 analysis:
   layers: ["conv1", "conv2", "conv3", "conv4"]  # Conv layer names for CRP (flat attributes)
-  composite: "epsilon_plus"  # LRP composite rule (no canonizers needed - no BatchNorm)
+  composite: "cnc_validated"  # LRP composite rule validated on CNC vibration data
   batch_size: 4  # Small batch for CRP memory constraints (full backward graph required)
+  use_class_weights: true  # Apply inverse-frequency class weights to concept relevances
 
 tcd:
   variant: "A"  # A: filterbank/window-based, B: temporal_descriptors, C: learned_clusters
@@ -53,7 +54,7 @@ tcd:
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space than conv1
+  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space
   concept_indices: []  # leave empty to auto-select
 
 output:

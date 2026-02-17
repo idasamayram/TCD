@@ -43,7 +43,8 @@ def run_crp_analysis(
     composite,
     output_path,
     batch_size=4,   # CRP needs full backward graph, so keep this very small
-    device='cuda' if torch.cuda.is_available() else 'cpu'
+    device='cuda' if torch.cuda.is_available() else 'cpu',
+    use_class_weights=False
 ):
     """
     Run CRP analysis on dataset and save concept features.
@@ -56,10 +57,17 @@ def run_crp_analysis(
         output_path: Directory to save results
         batch_size: Batch size
         device: Device to use
+        use_class_weights: If True, weight concept relevances by inverse class frequency
     """
     model.to(device)
     model.eval()
     print('device in run_crp_analysis:', device)
+    
+    # Get class weights from dataset if requested
+    class_weights = None
+    if use_class_weights and hasattr(dataset, 'weights'):
+        class_weights = dataset.weights.to(device)
+        print(f"Using class weights: {class_weights.cpu().numpy()}")
     
     # Initialize attribution and concept
     attributor = TimeSeriesCondAttribution(model)
@@ -146,10 +154,15 @@ def run_crp_analysis(
         # Store outputs from the attribution result
         for i in range(batch_size_actual):
             class_id = labels[i].item()
+            
+            # Apply class weight if enabled
+            weight = class_weights[class_id].item() if class_weights is not None else 1.0
 
             for layer in layer_names:
                 if layer in eps_relevances:
-                    class_features[class_id][layer].append(eps_relevances[layer][i])
+                    # Scale relevances by class weight to give minority class more influence
+                    weighted_relevance = eps_relevances[layer][i] * weight
+                    class_features[class_id][layer].append(weighted_relevance)
 
             class_outputs[class_id].append(attr.prediction[i].detach().cpu())
             class_sample_ids[class_id].append(sample_idx + i)
@@ -254,6 +267,11 @@ def main():
     composite = get_composite(composite_name)
     print(f"Using LRP composite: {composite_name}")
     
+    # Get class weights option
+    use_class_weights = config['analysis'].get('use_class_weights', False)
+    if use_class_weights:
+        print("Class weighting enabled for concept relevances")
+    
     # Run analysis
     run_crp_analysis(
         model=model,
@@ -262,7 +280,8 @@ def main():
         composite=composite,
         output_path=args.output,
         batch_size=batch_size,
-        device=device
+        device=device,
+        use_class_weights=use_class_weights
     )
 
 
