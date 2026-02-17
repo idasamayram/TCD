@@ -67,9 +67,9 @@ class LearnedClusterTCD:
         self,
         n_prototypes: int = 4,
         layer_name: str = 'conv3',  # Use conv3 for richer concept space (64 filters)
-        covariance_type: str = 'full',
-        n_init: int = 1,
-        max_iter: int = 10
+        covariance_type: str = 'diag',
+        n_init: int = 5,
+        max_iter: int = 200
     ):
         """
         Initialize learned cluster TCD.
@@ -77,9 +77,9 @@ class LearnedClusterTCD:
         Args:
             n_prototypes: Number of prototypes (GMM components) per class
             layer_name: Layer to extract concepts from
-            covariance_type: GMM covariance ('full', 'tied', 'diag', 'spherical')
-            n_init: Number of GMM initializations
-            max_iter: Maximum GMM iterations
+            covariance_type: GMM covariance ('diag' recommended for 64+ dims, 'full', 'tied', 'spherical')
+            n_init: Number of GMM initializations (default 5 for better convergence)
+            max_iter: Maximum GMM iterations (default 200 for 64-dim convergence)
         """
         self.n_prototypes = n_prototypes
         self.layer_name = layer_name

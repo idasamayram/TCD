@@ -197,28 +197,39 @@ def run_variant_c(
     features_path: str,
     output_path: str,
     config: dict,
-    layer_name: str = 'conv3',  # Use conv3 for richer concept space
+    layer_name: str = None,  # None = use config, otherwise override
     data_path: str = None  # Path to dataset for loading class weights
 ):
     """
-    Run Variant C: Learned cluster concepts.
+    Run Variant C: CRP-native concepts with GMM prototypes (PRIMARY METHOD).
+    
+    This is the correct approach:
+    1. CRP filter relevances ARE the concept space
+    2. GMM clustering in CRP space finds prototypes
+    3. Global window analysis identifies important temporal regions
+    4. Interpretation pipeline explains what prototypes mean
     
     Args:
         features_path: Path to CRP features directory
         output_path: Output directory
         config: Configuration dict
-        layer_name: Layer to use for concepts
+        layer_name: Layer to use for concepts (None = use config['tcd']['primary_layer'])
         data_path: Path to dataset for loading class weights (optional)
     """
-    print("\n" + "="*60)
-    print("VARIANT C: Learned Cluster / PCX-Style Concepts")
-    print("="*60)
+    print("\n" + "="*80)
+    print("VARIANT C: CRP-Native Concepts with GMM Prototypes (PRIMARY METHOD)")
+    print("="*80)
     
-    # Load concept features
-    print(f"Loading concept features for layer {layer_name}...")
+    # Get layer name from config if not specified
+    if layer_name is None:
+        layer_name = config['tcd'].get('primary_layer', 'conv3')
+    
+    # Load concept features (CRP filter relevances)
+    print(f"\nStep 1: Loading CRP concept relevances for layer {layer_name}...")
     features_list = []
     labels_list = []
     outputs_list = []
+    heatmaps_list = []
     
     for class_id in [0, 1]:
         # Load concept relevances
@@ -230,6 +241,7 @@ def run_variant_c(
         with h5py.File(h5_path, 'r') as f:
             if layer_name not in f:
                 print(f"Warning: Layer {layer_name} not in features file")
+                print(f"Available layers: {list(f.keys())}")
                 continue
             features = np.array(f[layer_name])
             features_list.append(features)
@@ -239,6 +251,13 @@ def run_variant_c(
         outputs_path = os.path.join(features_path, f"outputs_class_{class_id}.pt")
         outputs = torch.load(outputs_path)
         outputs_list.extend(outputs)
+        
+        # Load heatmaps for global window analysis
+        heatmaps_path = os.path.join(features_path, f"heatmaps_class_{class_id}.hdf5")
+        if os.path.exists(heatmaps_path):
+            with h5py.File(heatmaps_path, 'r') as f:
+                heatmaps = np.array(f['heatmaps'])
+                heatmaps_list.append(heatmaps)
         
         print(f"  Class {class_id}: {features.shape}")
     
@@ -250,8 +269,15 @@ def run_variant_c(
     labels = torch.tensor(labels_list).long()
     outputs = torch.stack(outputs_list)
     
-    print(f"\nTotal features: {features.shape}")
-    print(f"Feature dimension (n_concepts): {features.shape[1]}")
+    if heatmaps_list:
+        heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
+    else:
+        heatmaps = None
+    
+    print(f"\nCRP features loaded:")
+    print(f"  Shape: {features.shape}")
+    print(f"  Feature dimension (n_filters): {features.shape[1]}")
+    print(f"  These {features.shape[1]} filters ARE the concept space")
     
     # Load class weights if data path provided and use_class_weights is enabled
     class_weights = None
@@ -260,30 +286,147 @@ def run_variant_c(
         if os.path.exists(data_path):
             temp_dataset = VibrationDataset(data_path)
             class_weights = temp_dataset.weights
-            print(f"Loaded class weights from dataset: {class_weights.numpy()}")
+            print(f"\nClass weights loaded: {class_weights.numpy()}")
         else:
-            print(f"Warning: Data path {data_path} not found, cannot load class weights")
+            print(f"\nWarning: Data path {data_path} not found, cannot load class weights")
     
-    # Initialize LearnedClusterTCD
-    n_prototypes = config['tcd']['n_prototypes']
-    tcd = LearnedClusterTCD(n_prototypes=n_prototypes, layer_name=layer_name)
+    # Step 2: Fit GMM prototypes in CRP space
+    print("\n" + "="*80)
+    print("Step 2: Fit GMM Prototypes in CRP Filter Space")
+    print("="*80)
+    
+    # Check if we should auto-select n_prototypes
+    auto_select = config['tcd'].get('auto_select_n_prototypes', False)
+    
+    if auto_select:
+        print("\nAuto-selecting optimal n_prototypes using BIC...")
+        from tcd.prototypes import TemporalPrototypeDiscovery
+        
+        # Select for each class separately
+        optimal_n_dict = {}
+        for class_id in [0, 1]:
+            class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
+            class_features = features[class_mask]
+            
+            if class_features.shape[0] < 2:
+                optimal_n_dict[class_id] = 2
+                continue
+            
+            min_n = config['tcd'].get('min_prototypes', 2)
+            max_n = min(config['tcd'].get('max_prototypes', 10), class_features.shape[0] // 10)
+            
+            print(f"\nClass {class_id} ({class_features.shape[0]} samples):")
+            optimal_n, scores = TemporalPrototypeDiscovery.select_optimal_n_prototypes(
+                class_features,
+                min_prototypes=min_n,
+                max_prototypes=max_n,
+                covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
+                n_init=config['tcd'].get('gmm_n_init', 5),
+                max_iter=config['tcd'].get('gmm_max_iter', 200)
+            )
+            optimal_n_dict[class_id] = optimal_n
+        
+        # Use the average (rounded) for simplicity
+        # Note: This ensures same n_prototypes for both classes for consistency.
+        # Alternative approach: use per-class optimal values directly in GMM fitting
+        # by modifying LearnedClusterTCD to support different n_prototypes per class.
+        n_prototypes = int(np.mean(list(optimal_n_dict.values())))
+        print(f"\nUsing n_prototypes={n_prototypes} (averaged across classes)")
+        print(f"  Per-class optimal values: {optimal_n_dict}")
+        print(f"  Note: Using average to maintain consistency across classes")
+    else:
+        n_prototypes = config['tcd']['n_prototypes']
+        print(f"\nUsing configured n_prototypes={n_prototypes}")
+    
+    # Initialize LearnedClusterTCD with updated defaults
+    tcd = LearnedClusterTCD(
+        n_prototypes=n_prototypes,
+        layer_name=layer_name,
+        covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
+        n_init=config['tcd'].get('gmm_n_init', 5),
+        max_iter=config['tcd'].get('gmm_max_iter', 200)
+    )
     
     # Fit GMM prototypes
-    print(f"\nFitting {n_prototypes} prototypes per class...")
+    print(f"\nFitting {n_prototypes} prototypes per class with improved convergence settings...")
+    print(f"  Covariance type: {config['tcd'].get('gmm_covariance', 'diag')}")
+    print(f"  n_init: {config['tcd'].get('gmm_n_init', 5)}")
+    print(f"  max_iter: {config['tcd'].get('gmm_max_iter', 200)}")
     tcd.fit(features, labels, outputs, class_weights=class_weights)
     
-    # Analyze prototypes per class
+    # Step 3: Global window analysis
+    print("\n" + "="*80)
+    print("Step 3: Global Window Analysis")
+    print("="*80)
+    
+    global_windows = None
+    if heatmaps is not None:
+        from tcd.variants.global_concepts import GlobalWindowAnalysis
+        
+        gw_config = config['tcd'].get('global_windows', {})
+        analyzer = GlobalWindowAnalysis(
+            window_size=gw_config.get('window_size', 40),
+            n_top_positions=gw_config.get('n_top_positions', 10),
+            threshold_factor=gw_config.get('threshold_factor', 1.5),
+            per_class=gw_config.get('per_class', True)
+        )
+        
+        print(f"\nFinding globally important window positions...")
+        print(f"  Window size: {gw_config.get('window_size', 40)} timesteps")
+        print(f"  Top positions: {gw_config.get('n_top_positions', 10)}")
+        
+        global_windows = analyzer.find_important_windows(heatmaps, labels)
+        
+        # Compute coverage
+        coverage = analyzer.get_window_coverage_per_sample(heatmaps, labels)
+        print(f"\nWindow coverage statistics:")
+        for class_id, cov in coverage.items():
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"  Class {class_id} ({class_name}): mean={cov.mean():.2%}, std={cov.std():.2%}")
+    else:
+        print("\nWarning: Heatmaps not found, skipping global window analysis")
+    
+    # Step 4: Interpret prototypes
+    print("\n" + "="*80)
+    print("Step 4: Interpret CRP Prototypes")
+    print("="*80)
+    
+    from tcd.interpretation import ConceptInterpreter
+    
+    interpreter = ConceptInterpreter(
+        gmms=tcd.prototype_discovery.gmms,
+        features=features,
+        labels=labels,
+        layer_name=layer_name
+    )
+    
+    interpretations = interpreter.interpret_prototypes(
+        global_windows=global_windows or {},
+        heatmaps=heatmaps,
+        signals=None,  # Could load raw signals if available
+        top_k_filters=10
+    )
+    
+    # Print interpretations
+    interpreter.print_interpretations(interpretations, verbose=True)
+    
+    # Analyze prototypes per class (detailed statistics)
+    print("\n" + "="*80)
+    print("Step 5: Prototype Statistics")
+    print("="*80)
+    
     for class_id in [0, 1]:
-        print(f"\nClass {class_id} prototypes:")
+        class_name = "OK" if class_id == 0 else "NOK"
+        print(f"\n{class_name} (Class {class_id}) Prototypes:")
         
         # Get prototype samples
-        top_k = config['tcd']['top_k_samples']
+        top_k = config['tcd'].get('top_k_samples', 6)
         proto_samples = tcd.find_prototypes(class_id, top_k=top_k)
-        print(f"  Found top-{top_k} samples per prototype")
+        print(f"  Top-{top_k} representative samples identified per prototype")
         
         # Get coverage
         coverage = tcd.get_coverage(class_id)
-        print(f"  Coverage: {coverage}")
+        print(f"  Coverage per prototype: {coverage}")
         
         # Get assignments
         class_mask = labels == class_id
@@ -292,25 +435,47 @@ def run_variant_c(
         print(f"  Assignment distribution: {np.bincount(assignments)}")
     
     # Save results
+    print("\n" + "="*80)
+    print("Step 6: Save Results")
+    print("="*80)
+    
     os.makedirs(output_path, exist_ok=True)
     
     # Save TCD model
     with open(os.path.join(output_path, 'tcd_model.pkl'), 'wb') as f:
         pickle.dump(tcd, f)
+    print(f"  Saved TCD model")
     
+    # Save interpretations
+    interpretation_export = interpreter.export_to_dict(interpretations)
+    with open(os.path.join(output_path, 'interpretations.pkl'), 'wb') as f:
+        pickle.dump(interpretation_export, f)
+    print(f"  Saved interpretations")
+    
+    # Save global windows if available
+    if global_windows:
+        with open(os.path.join(output_path, 'global_windows.pkl'), 'wb') as f:
+            pickle.dump(global_windows, f)
+        print(f"  Saved global window analysis")
+    
+    # Save main results
     results = {
         'variant': 'C',
         'layer_name': layer_name,
         'n_prototypes': n_prototypes,
         'features': features.numpy(),
         'labels': labels.numpy(),
-        'outputs': outputs.numpy()
+        'outputs': outputs.numpy(),
+        'global_windows': global_windows,
+        'interpretations': interpretation_export
     }
     
     with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
         pickle.dump(results, f)
+    print(f"  Saved results")
     
-    print(f"\n✓ Results saved to {output_path}")
+    print(f"\n✓ All results saved to {output_path}")
+    print("="*80 + "\n")
 
 
 def run_variant_b(
