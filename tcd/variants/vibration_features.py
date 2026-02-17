@@ -244,7 +244,8 @@ class VibrationFeatureTCD:
         features = {}
         
         # Compute analytic signal (Hilbert transform)
-        analytic_signal = signal.hilbert(signal)
+        from scipy.signal import hilbert
+        analytic_signal = hilbert(signal)
         envelope = np.abs(analytic_signal)
         
         # Envelope statistics
