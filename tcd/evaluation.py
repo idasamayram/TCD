@@ -197,12 +197,14 @@ def evaluate_concept_quality(
     return metrics
 
 
-def print_evaluation_report(metrics: Dict[str, float]):
+def print_evaluation_report(metrics: Dict[str, float], per_class_metrics: Dict[str, Dict[str, float]] = None):
     """
     Print formatted evaluation report.
     
     Args:
-        metrics: Dictionary of evaluation metrics
+        metrics: Dictionary of overall evaluation metrics
+        per_class_metrics: Optional dictionary with 'class_0' and 'class_1' keys,
+                          each containing a dictionary of per-class metrics
     """
     print("\n" + "="*60)
     print("CONCEPT EVALUATION REPORT")
@@ -218,6 +220,39 @@ def print_evaluation_report(metrics: Dict[str, float]):
         print(f"  Coverage:      {metrics['coverage']:.3f}  (fraction of prototypes used)")
         print(f"  Balance:       {metrics['balance']:.3f}  (assignment distribution)")
         print(f"  Max Coverage:  {metrics['max_coverage']:.3f}  (largest prototype fraction)")
+    
+    # Print per-class comparison if provided
+    if per_class_metrics:
+        print("\n" + "="*60)
+        print("PER-CLASS METRICS COMPARISON")
+        print("="*60)
+        
+        class_0_metrics = per_class_metrics.get('class_0', {})
+        class_1_metrics = per_class_metrics.get('class_1', {})
+        
+        print(f"\n{'Metric':<20} {'OK (Class 0)':<20} {'NOK (Class 1)':<20}")
+        print("-"*60)
+        
+        # Core metrics
+        for metric_name in ['faithfulness', 'stability', 'purity']:
+            val_0 = class_0_metrics.get(metric_name, 0)
+            val_1 = class_1_metrics.get(metric_name, 0)
+            print(f"{metric_name.capitalize()+':':<20} {val_0:>19.3f} {val_1:>19.3f}")
+        
+        # Prototype metrics if available
+        if 'coverage' in class_0_metrics or 'coverage' in class_1_metrics:
+            print()
+            # Use a mapping for consistent display names
+            metric_display_names = {
+                'coverage': 'Coverage:',
+                'balance': 'Balance:',
+                'max_coverage': 'Max Coverage:'
+            }
+            for metric_name in ['coverage', 'balance', 'max_coverage']:
+                val_0 = class_0_metrics.get(metric_name, 0)
+                val_1 = class_1_metrics.get(metric_name, 0)
+                display_name = metric_display_names[metric_name]
+                print(f"{display_name:<20} {val_0:>19.3f} {val_1:>19.3f}")
     
     print("="*60 + "\n")
 

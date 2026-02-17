@@ -93,11 +93,31 @@ def run_variant_a(
     concept_relevances = tcd.extract_concepts(heatmaps)
     print(f"Concept relevances shape: {concept_relevances.shape}")
     
-    # Compute importance per concept
+    # Compute importance per concept (overall and per-class)
     importance = tcd.compute_concept_importance(heatmaps)
-    print("\nConcept importance:")
-    for i, (label, imp) in enumerate(zip(tcd.get_concept_labels(), importance)):
-        print(f"  {label}: {imp:.4f}")
+    
+    # Separate by class
+    class_0_mask = np.array(labels) == 0
+    class_1_mask = np.array(labels) == 1
+    heatmaps_class_0 = heatmaps[class_0_mask]
+    heatmaps_class_1 = heatmaps[class_1_mask]
+    
+    importance_class_0 = tcd.compute_concept_importance(heatmaps_class_0)
+    importance_class_1 = tcd.compute_concept_importance(heatmaps_class_1)
+    
+    print("\n" + "="*60)
+    print("CONCEPT IMPORTANCE (Overall and Per-Class)")
+    print("="*60)
+    print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
+    print("-"*84)
+    for i, label in enumerate(tcd.get_concept_labels()):
+        if importance_class_0[i] > 0:
+            ratio = importance_class_1[i] / importance_class_0[i]
+            ratio_str = f"{ratio:>14.2f}x"
+        else:
+            ratio_str = "N/A".rjust(15)
+        print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
+    print("="*84 + "\n")
     
     # Save results
     os.makedirs(output_path, exist_ok=True)
@@ -108,7 +128,9 @@ def run_variant_a(
         'concept_labels': tcd.get_concept_labels(),
         'concept_relevances': concept_relevances.numpy(),
         'labels': labels,
-        'importance': importance
+        'importance': importance,
+        'importance_class_0': importance_class_0,
+        'importance_class_1': importance_class_1
     }
     
     with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
