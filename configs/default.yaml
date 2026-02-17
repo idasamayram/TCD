@@ -35,7 +35,7 @@ tcd:
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "conv1"
+  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space than conv1
   concept_indices: []  # leave empty to auto-select
 
 output:

@@ -66,7 +66,7 @@ class LearnedClusterTCD:
     def __init__(
         self,
         n_prototypes: int = 4,
-        layer_name: str = 'conv1',
+        layer_name: str = 'conv3',  # Use conv3 for richer concept space (64 filters)
         covariance_type: str = 'full',
         n_init: int = 1,
         max_iter: int = 10
@@ -274,8 +274,15 @@ class LearnedClusterTCD:
     def get_concept_labels(self) -> List[str]:
         """Get concept labels (filter indices)."""
         # Concepts = layer filters, labeled by index
-        # Exact number depends on layer architecture
-        return [f"Filter-{i}" for i in range(64)]  # Placeholder
+        # Map layer names to filter counts based on CNN1D_Wide architecture
+        layer_filters = {
+            'conv1': 16,
+            'conv2': 32,
+            'conv3': 64,
+            'conv4': 128
+        }
+        n_filters = layer_filters.get(self.layer_name, 64)  # Default to 64 if unknown
+        return [f"Filter-{i}" for i in range(n_filters)]
 
 
 if __name__ == "__main__":
