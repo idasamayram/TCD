@@ -200,12 +200,12 @@ class CNCValidatedComposite(SpecialFirstLayerMapComposite):
             (nn.AdaptiveAvgPool1d, Norm()),
             (AvgPool, Norm()),
             (Linear, Epsilon(epsilon=epsilon)),
-            (Convolution, Gamma(gamma=gamma, stabilizer=stabilizer)),
+            (Convolution, Gamma(gamma=gamma)),
         ]
         
         # First layer map - applies AlphaBeta to first conv layer
         first_map = [
-            (Convolution, AlphaBeta(alpha=alpha, beta=beta, stabilizer=stabilizer))
+            (Convolution, AlphaBeta(alpha=alpha, beta=beta))
         ]
         
         super().__init__(
