@@ -80,11 +80,56 @@ def evaluate_variant_a(
     print("\nComputing stability and purity...")
     from tcd.evaluation import compute_stability, compute_concept_purity
     
+    # Overall metrics
     stability = compute_stability(concept_relevances.numpy(), labels)
     purity = compute_concept_purity(concept_relevances.numpy())
     
-    print(f"Stability: {stability:.3f}")
-    print(f"Purity: {purity:.3f}")
+    print(f"Overall Stability: {stability:.3f}")
+    print(f"Overall Purity: {purity:.3f}")
+    
+    # Per-class metrics
+    class_0_mask = labels == 0
+    class_1_mask = labels == 1
+    concept_relevances_class_0 = concept_relevances[class_0_mask]
+    concept_relevances_class_1 = concept_relevances[class_1_mask]
+    
+    # Compute per-class stability and purity for class 0 (OK)
+    if len(concept_relevances_class_0) > 0:
+        stability_class_0 = compute_stability(concept_relevances_class_0.numpy(), np.zeros(len(concept_relevances_class_0)))
+        purity_class_0 = compute_concept_purity(concept_relevances_class_0.numpy())
+    else:
+        stability_class_0 = 0.0
+        purity_class_0 = 0.0
+    
+    # Compute per-class stability and purity for class 1 (NOK)
+    if len(concept_relevances_class_1) > 0:
+        stability_class_1 = compute_stability(concept_relevances_class_1.numpy(), np.zeros(len(concept_relevances_class_1)))
+        purity_class_1 = compute_concept_purity(concept_relevances_class_1.numpy())
+    else:
+        stability_class_1 = 0.0
+        purity_class_1 = 0.0
+    
+    # Print per-class report
+    print("\n" + "="*60)
+    print("PER-CLASS EVALUATION REPORT")
+    print("="*60)
+    print(f"\n{'Metric':<20} {'OK (Class 0)':<20} {'NOK (Class 1)':<20}")
+    print("-"*60)
+    print(f"{'Stability:':<20} {stability_class_0:>19.3f} {stability_class_1:>19.3f}")
+    print(f"{'Purity:':<20} {purity_class_0:>19.3f} {purity_class_1:>19.3f}")
+    print("="*60 + "\n")
+    
+    # Show per-class concept importance breakdown
+    print("\nPer-Class Concept Importance Breakdown:")
+    print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15}")
+    print("-"*65)
+    
+    importance_class_0 = concept_relevances_class_0.mean(dim=0).numpy()
+    importance_class_1 = concept_relevances_class_1.mean(dim=0).numpy()
+    
+    for i, label in enumerate(results['concept_labels']):
+        print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f}")
+    print("-"*65 + "\n")
     
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
@@ -92,7 +137,13 @@ def evaluate_variant_a(
         'variant': 'A',
         'stability': stability,
         'purity': purity,
-        'importance': importance
+        'importance': importance,
+        'stability_class_0': stability_class_0,
+        'stability_class_1': stability_class_1,
+        'purity_class_0': purity_class_0,
+        'purity_class_1': purity_class_1,
+        'importance_class_0': importance_class_0,
+        'importance_class_1': importance_class_1
     }
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:
@@ -143,19 +194,25 @@ def evaluate_variant_c(
     # Get number of concepts (filters at layer)
     n_concepts = features.shape[1]
     
-    # Measure concept importance via intervention
+    # Measure concept importance via intervention for both classes
     print(f"\nMeasuring importance of {n_concepts} concepts via intervention...")
-    print("Testing on class 0 samples...")
     
     model.to(device)
     model.eval()
     
-    # Create subset of dataset for class 0
+    # Create subsets for both classes
     class_0_indices = [i for i, (_, label) in enumerate(dataset) if label == 0]
+    class_1_indices = [i for i, (_, label) in enumerate(dataset) if label == 1]
+    
+    importance_scores_class_0 = np.zeros(n_concepts)
+    importance_scores_class_1 = np.zeros(n_concepts)
+    
+    # Test on class 0 (OK)
+    print(f"Testing on class 0 (OK) samples ({len(class_0_indices)} available)...")
     class_0_subset = torch.utils.data.Subset(dataset, class_0_indices[:min(100, len(class_0_indices))])
     
     if len(class_0_subset) > 0:
-        importance_scores = measure_concept_importance(
+        importance_scores_class_0 = measure_concept_importance(
             model=model,
             dataset=class_0_subset,
             layer_name=layer_name,
@@ -165,48 +222,123 @@ def evaluate_variant_c(
             batch_size=config['analysis']['batch_size']
         )
         
-        print(f"\nTop 5 most important concepts:")
-        top_indices = np.argsort(importance_scores)[-5:][::-1]
+        print(f"\nTop 5 most important concepts for OK (class 0):")
+        top_indices = np.argsort(importance_scores_class_0)[-5:][::-1]
         for idx in top_indices:
-            print(f"  Concept {idx}: {importance_scores[idx]:.4f}")
+            print(f"  Concept {idx}: {importance_scores_class_0[idx]:.4f}")
     else:
         print("Warning: No class 0 samples found for intervention test")
-        importance_scores = np.zeros(n_concepts)
+    
+    # Test on class 1 (NOK)
+    print(f"\nTesting on class 1 (NOK) samples ({len(class_1_indices)} available)...")
+    class_1_subset = torch.utils.data.Subset(dataset, class_1_indices[:min(100, len(class_1_indices))])
+    
+    if len(class_1_subset) > 0:
+        importance_scores_class_1 = measure_concept_importance(
+            model=model,
+            dataset=class_1_subset,
+            layer_name=layer_name,
+            n_concepts=n_concepts,
+            target_class=1,
+            method='suppress',
+            batch_size=config['analysis']['batch_size']
+        )
+        
+        print(f"\nTop 5 most important concepts for NOK (class 1):")
+        top_indices = np.argsort(importance_scores_class_1)[-5:][::-1]
+        for idx in top_indices:
+            print(f"  Concept {idx}: {importance_scores_class_1[idx]:.4f}")
+    else:
+        print("Warning: No class 1 samples found for intervention test")
+    
+    # Overall importance (averaged across both classes)
+    importance_scores = (importance_scores_class_0 + importance_scores_class_1) / 2
     
     # Compute evaluation metrics
     print("\nComputing evaluation metrics...")
     
-    # For faithfulness, we need intervention effects
-    # Use importance scores as proxy for intervention effects
-    intervention_effects = importance_scores
+    from tcd.evaluation import compute_faithfulness, compute_stability, compute_concept_purity, compute_prototype_coverage
     
     # Get relevance scores (mean of features)
     relevance_scores = features.abs().mean(dim=0).numpy()
     
-    from tcd.evaluation import compute_faithfulness, compute_stability, compute_concept_purity
+    # Separate features by class
+    class_0_mask = labels == 0
+    class_1_mask = labels == 1
+    class_0_features = features[class_0_mask]
+    class_1_features = features[class_1_mask]
     
+    # Overall metrics
+    intervention_effects = importance_scores
     faithfulness = compute_faithfulness(relevance_scores, intervention_effects)
     stability = compute_stability(features.numpy(), labels.numpy())
     purity = compute_concept_purity(features.numpy())
     
-    # Get prototype coverage
-    class_0_features = features[labels == 0]
-    if len(class_0_features) > 0:
-        assignments = tcd.assign_prototype(class_0_features, class_id=0)
-        from tcd.evaluation import compute_prototype_coverage
-        coverage_metrics = compute_prototype_coverage(assignments, tcd.n_prototypes)
-    else:
-        coverage_metrics = {'coverage': 0, 'balance': 0, 'max_coverage': 0}
+    # Per-class metrics for class 0 (OK)
+    relevance_scores_class_0 = class_0_features.abs().mean(dim=0).numpy()
+    faithfulness_class_0 = compute_faithfulness(relevance_scores_class_0, importance_scores_class_0)
+    stability_class_0 = compute_stability(class_0_features.numpy(), np.zeros(len(class_0_features)))
+    purity_class_0 = compute_concept_purity(class_0_features.numpy())
     
-    # Print report
+    # Prototype coverage for class 0
+    if len(class_0_features) > 0:
+        assignments_class_0 = tcd.assign_prototype(class_0_features, class_id=0)
+        coverage_metrics_class_0 = compute_prototype_coverage(assignments_class_0, tcd.n_prototypes)
+    else:
+        coverage_metrics_class_0 = {'coverage': 0, 'balance': 0, 'max_coverage': 0}
+    
+    # Per-class metrics for class 1 (NOK)
+    if len(class_1_features) > 0:
+        relevance_scores_class_1 = class_1_features.abs().mean(dim=0).numpy()
+        faithfulness_class_1 = compute_faithfulness(relevance_scores_class_1, importance_scores_class_1)
+        stability_class_1 = compute_stability(class_1_features.numpy(), np.zeros(len(class_1_features)))
+        purity_class_1 = compute_concept_purity(class_1_features.numpy())
+        
+        # Prototype coverage for class 1
+        assignments_class_1 = tcd.assign_prototype(class_1_features, class_id=1)
+        coverage_metrics_class_1 = compute_prototype_coverage(assignments_class_1, tcd.n_prototypes)
+    else:
+        faithfulness_class_1 = 0.0
+        stability_class_1 = 0.0
+        purity_class_1 = 0.0
+        coverage_metrics_class_1 = {'coverage': 0, 'balance': 0, 'max_coverage': 0}
+    
+    # Print overall report
     metrics = {
         'faithfulness': faithfulness,
         'stability': stability,
-        'purity': purity,
-        **coverage_metrics
+        'purity': purity
     }
     
     print_evaluation_report(metrics)
+    
+    # Print per-class report
+    metrics_class_0 = {
+        'faithfulness': faithfulness_class_0,
+        'stability': stability_class_0,
+        'purity': purity_class_0,
+        **{f"{k}": v for k, v in coverage_metrics_class_0.items()}
+    }
+    
+    metrics_class_1 = {
+        'faithfulness': faithfulness_class_1,
+        'stability': stability_class_1,
+        'purity': purity_class_1,
+        **{f"{k}": v for k, v in coverage_metrics_class_1.items()}
+    }
+    
+    print("\n" + "="*60)
+    print("PER-CLASS EVALUATION REPORT")
+    print("="*60)
+    print(f"\n{'Metric':<20} {'OK (Class 0)':<20} {'NOK (Class 1)':<20}")
+    print("-"*60)
+    print(f"{'Faithfulness:':<20} {faithfulness_class_0:>19.3f} {faithfulness_class_1:>19.3f}")
+    print(f"{'Stability:':<20} {stability_class_0:>19.3f} {stability_class_1:>19.3f}")
+    print(f"{'Purity:':<20} {purity_class_0:>19.3f} {purity_class_1:>19.3f}")
+    print(f"{'Coverage:':<20} {coverage_metrics_class_0['coverage']:>19.3f} {coverage_metrics_class_1['coverage']:>19.3f}")
+    print(f"{'Balance:':<20} {coverage_metrics_class_0['balance']:>19.3f} {coverage_metrics_class_1['balance']:>19.3f}")
+    print(f"{'Max Coverage:':<20} {coverage_metrics_class_0['max_coverage']:>19.3f} {coverage_metrics_class_1['max_coverage']:>19.3f}")
+    print("="*60 + "\n")
     
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
@@ -214,7 +346,11 @@ def evaluate_variant_c(
         'variant': 'C',
         'layer_name': layer_name,
         'metrics': metrics,
-        'importance_scores': importance_scores
+        'importance_scores': importance_scores,
+        'importance_scores_class_0': importance_scores_class_0,
+        'importance_scores_class_1': importance_scores_class_1,
+        'metrics_class_0': metrics_class_0,
+        'metrics_class_1': metrics_class_1
     }
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:
