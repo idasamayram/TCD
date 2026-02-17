@@ -100,6 +100,60 @@ class FilterBankConcept:
         raise NotImplementedError("Use tcd.variants.filterbank.FilterBankTCD")
 
 
+class WindowConcept:
+    """
+    Window-based concept extractor for data-driven concept discovery.
+    
+    Instead of hardcoded frequency bands, this extracts important time windows
+    from LRP heatmaps, computes rich feature vectors (RMS, peak frequency,
+    crest factor, kurtosis, etc.), and clusters them using GMM.
+    
+    Each cluster represents a discovered concept (e.g., "high-amplitude impulse",
+    "low-frequency oscillation") that the model uses for predictions.
+    
+    This is more flexible and data-driven than FilterBankConcept.
+    
+    See tcd/variants/filterbank.WindowConceptTCD for full implementation.
+    """
+    
+    def __init__(
+        self,
+        n_concepts: int = 6,
+        window_size: int = 40,
+        n_top_windows: int = 20,
+        sample_rate: int = 400
+    ):
+        """
+        Initialize window-based concept.
+        
+        Args:
+            n_concepts: Number of concepts to discover
+            window_size: Time window size in timesteps
+            n_top_windows: Number of windows to extract per sample
+            sample_rate: Sampling rate in Hz
+        """
+        self.n_concepts = n_concepts
+        self.window_size = window_size
+        self.n_top_windows = n_top_windows
+        self.sample_rate = sample_rate
+    
+    def attribute(
+        self,
+        relevance: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Extract window-based concept relevances.
+        
+        Args:
+            relevance: Input-level relevance of shape (B, C, T)
+            
+        Returns:
+            Concept relevances of shape (B, n_concepts)
+        """
+        # Placeholder - full implementation in variants/filterbank.py
+        raise NotImplementedError("Use tcd.variants.filterbank.WindowConceptTCD")
+
+
 if __name__ == "__main__":
     # Test ChannelConcept on synthetic 1D data
     cc = ChannelConcept()

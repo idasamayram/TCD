@@ -26,7 +26,7 @@ import pickle
 from pathlib import Path
 
 # from models.cnn1d_model import CNN1D_Wide
-from tcd.variants.filterbank import FilterBankTCD
+from tcd.variants.filterbank import FilterBankTCD, WindowConceptTCD
 from tcd.variants.temporal_descriptors import TemporalDescriptorTCD
 from tcd.variants.learned_clusters import LearnedClusterTCD
 from tcd.visualization import plot_prototype_grid, plot_concept_relevance
@@ -41,18 +41,23 @@ def load_config(config_path: str) -> dict:
 def run_variant_a(
     features_path: str,
     output_path: str,
-    config: dict
+    config: dict,
+    use_window_based: bool = False
 ):
     """
-    Run Variant A: Filterbank concepts.
+    Run Variant A: Filterbank or window-based concepts.
     
     Args:
         features_path: Path to CRP features directory
         output_path: Output directory
         config: Configuration dict
+        use_window_based: If True, use WindowConceptTCD; else use FilterBankTCD
     """
     print("\n" + "="*60)
-    print("VARIANT A: Frequency-Band Filterbank Concepts")
+    if use_window_based:
+        print("VARIANT A: Window-Based Concept Discovery (Data-Driven)")
+    else:
+        print("VARIANT A: Frequency-Band Filterbank Concepts")
     print("="*60)
     
     # Load heatmaps
@@ -79,19 +84,52 @@ def run_variant_a(
     heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
     labels = np.array(labels_list)
     
-    # Initialize FilterBankTCD
-    bands = config['tcd']['filterbank_bands']
+    # Initialize TCD variant
     sample_rate = config['data']['sample_rate']
     
-    tcd = FilterBankTCD(bands=bands, sample_rate=sample_rate)
-    print(f"\nFilterbank with {len(bands)} bands:")
-    for i, label in enumerate(tcd.get_concept_labels()):
-        print(f"  Concept {i}: {label}")
+    if use_window_based:
+        # Window-based concept discovery
+        window_config = config['tcd'].get('window_concept', {})
+        n_concepts = config['tcd'].get('n_concepts', 6)
+        
+        tcd = WindowConceptTCD(
+            n_concepts=n_concepts,
+            window_size=window_config.get('window_size', 40),
+            n_top_windows=window_config.get('n_top_windows', 20),
+            sample_rate=sample_rate,
+            features=window_config.get('features', None),
+            gmm_covariance=window_config.get('gmm_covariance', 'full'),
+            gmm_n_init=window_config.get('gmm_n_init', 10),
+            gmm_max_iter=window_config.get('gmm_max_iter', 100)
+        )
+        
+        print(f"\nWindow-based concept discovery with {n_concepts} concepts")
+        print(f"  Window size: {tcd.window_size} timesteps")
+        print(f"  Top windows per sample: {tcd.n_top_windows}")
+        print(f"  Features: {tcd.features}")
+        
+        # Fit GMM on training data
+        print("\nFitting GMM to discover concepts...")
+        tcd.fit(heatmaps, labels=torch.from_numpy(labels))
+        
+    else:
+        # Filterbank-based concepts (legacy)
+        bands = config['tcd']['filterbank_bands']
+        tcd = FilterBankTCD(bands=bands, sample_rate=sample_rate)
+        print(f"\nFilterbank with {len(bands)} bands:")
+        for i, label in enumerate(tcd.get_concept_labels()):
+            print(f"  Concept {i}: {label}")
     
     # Extract concepts
     print("\nExtracting concepts...")
     concept_relevances = tcd.extract_concepts(heatmaps)
     print(f"Concept relevances shape: {concept_relevances.shape}")
+    
+    # Get concept labels
+    concept_labels = tcd.get_concept_labels()
+    print(f"\nDiscovered concepts:")
+    for i, label in enumerate(concept_labels):
+        print(f"  {label}")
     
     # Compute importance per concept (overall and per-class)
     importance = tcd.compute_concept_importance(heatmaps)
@@ -108,30 +146,33 @@ def run_variant_a(
     print("\n" + "="*60)
     print("CONCEPT IMPORTANCE (Overall and Per-Class)")
     print("="*60)
-    print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
-    print("-"*84)
-    for i, label in enumerate(tcd.get_concept_labels()):
+    print(f"{'Concept':<40} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
+    print("-"*124)
+    for i, label in enumerate(concept_labels):
         if importance_class_0[i] > 0:
             ratio = importance_class_1[i] / importance_class_0[i]
             ratio_str = f"{ratio:>14.2f}x"
         else:
             ratio_str = "N/A".rjust(15)
-        print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
-    print("="*84 + "\n")
+        print(f"{label:<40} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
+    print("="*124 + "\n")
     
     # Save results
     os.makedirs(output_path, exist_ok=True)
     
     results = {
         'variant': 'A',
-        'bands': bands,
-        'concept_labels': tcd.get_concept_labels(),
+        'method': 'window_based' if use_window_based else 'filterbank',
+        'concept_labels': concept_labels,
         'concept_relevances': concept_relevances.numpy(),
         'labels': labels,
         'importance': importance,
         'importance_class_0': importance_class_0,
         'importance_class_1': importance_class_1
     }
+    
+    if not use_window_based:
+        results['bands'] = config['tcd']['filterbank_bands']
     
     with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
         pickle.dump(results, f)
@@ -282,13 +323,15 @@ def main():
     parser.add_argument('--config', type=str, default='configs/default.yaml',
                        help='Path to config file')
     parser.add_argument('--variant', type=str, required=True, choices=['A', 'B', 'C'],
-                       help='TCD variant: A (filterbank), B (temporal descriptors), C (learned clusters)')
+                       help='TCD variant: A (filterbank/window), B (temporal descriptors), C (learned clusters)')
     parser.add_argument('--features', type=str, required=True,
                        help='Path to CRP features directory from run_analysis.py')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for concept results')
     parser.add_argument('--layer', type=str, default='conv3',
                        help='Layer to use for Variant C (default: conv3)')
+    parser.add_argument('--window-based', action='store_true',
+                       help='Use window-based concept discovery for Variant A (default: filterbank)')
     
     args = parser.parse_args()
     
@@ -297,7 +340,7 @@ def main():
     
     # Run appropriate variant
     if args.variant == 'A':
-        run_variant_a(args.features, args.output, config)
+        run_variant_a(args.features, args.output, config, use_window_based=args.window_based)
     elif args.variant == 'B':
         run_variant_b(args.features, args.output, config)
     elif args.variant == 'C':
