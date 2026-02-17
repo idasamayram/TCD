@@ -11,7 +11,9 @@ Tests discovered concepts via:
 Usage:
     python scripts/evaluate_concepts.py --concepts results/concepts_A --model path/to/model.ckpt --data path/to/data
 """
-
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import argparse
 import os
 import yaml
@@ -258,7 +260,7 @@ def main():
     # Load dataset
     print(f"Loading dataset from {data_path}...")
     if os.path.exists(data_path):
-        dataset = VibrationDataset(data_path, split='test')
+        dataset = VibrationDataset(data_path)
         print(f"Loaded {len(dataset)} samples")
     else:
         print(f"Warning: Data path not found at {data_path}")

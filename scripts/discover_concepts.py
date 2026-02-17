@@ -12,6 +12,9 @@ Usage:
     # Variant C: Learned clusters (requires features)
     python scripts/discover_concepts.py --variant C --features results/crp_features --output results/concepts_C
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import os
@@ -22,7 +25,7 @@ import numpy as np
 import pickle
 from pathlib import Path
 
-from models.cnn1d_model import CNN1D_Wide
+# from models.cnn1d_model import CNN1D_Wide
 from tcd.variants.filterbank import FilterBankTCD
 from tcd.variants.temporal_descriptors import TemporalDescriptorTCD
 from tcd.variants.learned_clusters import LearnedClusterTCD
