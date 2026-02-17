@@ -21,6 +21,26 @@ from typing import Dict, List, Tuple, Optional, Any
 from sklearn.mixture import GaussianMixture
 
 
+# Class name mapping (can be customized per dataset)
+DEFAULT_CLASS_NAMES = {0: "OK", 1: "NOK"}
+
+
+def get_class_name(class_id: int, class_names: Optional[Dict[int, str]] = None) -> str:
+    """
+    Get human-readable class name for a class ID.
+    
+    Args:
+        class_id: Class ID
+        class_names: Optional custom class name mapping
+        
+    Returns:
+        Class name string
+    """
+    if class_names is None:
+        class_names = DEFAULT_CLASS_NAMES
+    return class_names.get(class_id, f"Class_{class_id}")
+
+
 class ConceptInterpreter:
     """
     Interpret CRP concept prototypes by analyzing what they respond to.
@@ -42,7 +62,8 @@ class ConceptInterpreter:
         gmms: Dict[int, GaussianMixture],
         features: torch.Tensor,
         labels: torch.Tensor,
-        layer_name: str = "conv3"
+        layer_name: str = "conv3",
+        class_names: Optional[Dict[int, str]] = None
     ):
         """
         Initialize concept interpreter.
@@ -52,12 +73,14 @@ class ConceptInterpreter:
             features: CRP concept relevances of shape (N, n_filters)
             labels: Class labels of shape (N,)
             layer_name: Name of the layer (for reporting)
+            class_names: Optional custom class name mapping (default: {0: "OK", 1: "NOK"})
         """
         self.gmms = gmms
         self.features = features
         self.labels = labels
         self.layer_name = layer_name
         self.n_filters = features.shape[1]
+        self.class_names = class_names or DEFAULT_CLASS_NAMES
     
     def interpret_prototypes(
         self,
@@ -258,7 +281,7 @@ class ConceptInterpreter:
         Returns:
             Human-readable description string
         """
-        class_name = "OK" if class_id == 0 else "NOK"
+        class_name = get_class_name(class_id, self.class_names)
         
         description_parts = [
             f"Prototype {proto_idx} for {class_name} (Class {class_id})",
@@ -309,7 +332,7 @@ class ConceptInterpreter:
         print("="*80)
         
         for class_id in sorted(interpretations.keys()):
-            class_name = "OK" if class_id == 0 else "NOK"
+            class_name = get_class_name(class_id, self.class_names)
             print(f"\n{'='*80}")
             print(f"CLASS {class_id} ({class_name})")
             print(f"{'='*80}")

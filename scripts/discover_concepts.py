@@ -327,8 +327,13 @@ def run_variant_c(
             optimal_n_dict[class_id] = optimal_n
         
         # Use the average (rounded) for simplicity
+        # Note: This ensures same n_prototypes for both classes for consistency.
+        # Alternative approach: use per-class optimal values directly in GMM fitting
+        # by modifying LearnedClusterTCD to support different n_prototypes per class.
         n_prototypes = int(np.mean(list(optimal_n_dict.values())))
         print(f"\nUsing n_prototypes={n_prototypes} (averaged across classes)")
+        print(f"  Per-class optimal values: {optimal_n_dict}")
+        print(f"  Note: Using average to maintain consistency across classes")
     else:
         n_prototypes = config['tcd']['n_prototypes']
         print(f"\nUsing configured n_prototypes={n_prototypes}")

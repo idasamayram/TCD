@@ -395,7 +395,9 @@ def test_config_has_new_settings():
     """Test that config has new settings for improved GMM and global windows."""
     import yaml
     
-    with open('configs/default.yaml', 'r') as f:
+    # Use absolute path relative to test file location
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'default.yaml')
+    with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
     # Check primary_layer

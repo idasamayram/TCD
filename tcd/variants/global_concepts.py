@@ -264,8 +264,12 @@ class GlobalWindowAnalysis:
             elif feat_name == 'zero_crossing_rate':
                 # Zero crossing rate per channel, then mean
                 signs = torch.sign(window)
-                zcr = ((signs[:, :, 1:] != signs[:, :, :-1]).float().sum(dim=2) / window.shape[2]).mean(dim=1, keepdim=True)
-                feat = zcr
+                # Detect sign changes
+                sign_changes = (signs[:, :, 1:] != signs[:, :, :-1]).float()
+                # Calculate rate per channel
+                zcr_per_channel = sign_changes.sum(dim=2) / window.shape[2]
+                # Mean across channels
+                feat = zcr_per_channel.mean(dim=1, keepdim=True)
             elif feat_name == 'inter_axis_corr':
                 # Correlation between channels (for 3-axis accelerometer)
                 if window.shape[1] >= 2:
