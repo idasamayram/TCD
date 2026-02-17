@@ -86,6 +86,7 @@ def run_crp_analysis(
     # CRP/LRP requires gradient computation graph to propagate relevance.
     # model.eval() already handles dropout/batchnorm for inference.
     for data, labels in tqdm(dataloader, desc="Processing batches"):
+        # Ensure data is on the correct device
         data = data.to(device)
         batch_size_actual = data.shape[0]
 
@@ -97,13 +98,39 @@ def run_crp_analysis(
         conditions = [{"y": label.item()} for label in labels]
 
         # Compute CRP attribution with layer recording
-        data_with_grad = data.clone().requires_grad_(True)
-        attr = attributor(
-            data_with_grad,
-            conditions,
-            composite,
-            record_layer=layer_names
-        )
+        # CRITICAL: Explicitly move data_with_grad to the same device as model
+        data_with_grad = data.clone().requires_grad_(True).to(device)
+        
+        try:
+            attr = attributor(
+                data_with_grad,
+                conditions,
+                composite,
+                record_layer=layer_names
+            )
+            
+            # Safety check: verify attr is the expected namedtuple
+            if not hasattr(attr, 'relevances'):
+                raise AttributeError(
+                    f"attributor() returned unexpected type: {type(attr)}. "
+                    f"Expected namedtuple with 'relevances' attribute."
+                )
+            
+            # Safety check: verify relevances is a dict
+            if not isinstance(attr.relevances, dict):
+                raise TypeError(
+                    f"attr.relevances has unexpected type: {type(attr.relevances)}. "
+                    f"Expected dict mapping layer_name -> tensor."
+                )
+                
+        except Exception as e:
+            print(f"\n⚠ CRP attribution failed for batch starting at sample {sample_idx}")
+            print(f"Error: {e}")
+            print(f"Batch size: {batch_size_actual}, Device: {device}")
+            print("Skipping this batch and continuing...")
+            sample_idx += batch_size_actual
+            continue
+            
         # attr is a namedtuple: (heatmap, activations, relevances, prediction)
         heatmap = attr.heatmap
 

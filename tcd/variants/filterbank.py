@@ -262,5 +262,379 @@ def test_filterbank_tcd():
     print("✓ FilterBankTCD test passed!")
 
 
+class WindowConceptTCD:
+    """
+    Window-based concept discovery using data-driven LRP heatmap analysis.
+    
+    Replaces hardcoded frequency bands with automatic discovery of important
+    time windows from LRP heatmaps, then clusters rich feature vectors.
+    
+    Algorithm:
+    1. Extract top-K most important time windows from heatmaps (by absolute relevance)
+    2. For each window, compute CNC-relevant features:
+       - RMS amplitude (overall vibration energy)
+       - Peak frequency (resonance/chatter frequency)
+       - Crest factor (peak/RMS - impulsiveness)
+       - Kurtosis (spikiness - fault detection)
+       - Zero crossing rate (frequency proxy)
+       - Spectral energy, centroid (frequency content)
+       - Mean, std, max amplitude (statistical features)
+    3. Cluster feature vectors using GMM to discover concepts
+    4. Each cluster = one concept (e.g., "high-amplitude impulse", "low-freq oscillation")
+    
+    This approach is data-driven and model-informed, letting the LRP heatmaps
+    guide concept discovery rather than using physics-based frequency bands.
+    """
+    
+    def __init__(
+        self,
+        n_concepts: int = 6,
+        window_size: int = 40,  # timesteps (0.1s at 400Hz)
+        n_top_windows: int = 20,  # windows to extract per sample
+        sample_rate: int = 400,  # Hz
+        features: Optional[List[str]] = None,
+        gmm_covariance: str = 'full',
+        gmm_n_init: int = 10,
+        gmm_max_iter: int = 100,
+        random_state: int = 42
+    ):
+        """
+        Initialize window-based concept discovery.
+        
+        Args:
+            n_concepts: Number of concepts to discover via GMM
+            window_size: Size of time windows in timesteps
+            n_top_windows: Number of top windows to extract per sample
+            sample_rate: Sampling rate in Hz
+            features: List of feature names to extract (default: all)
+            gmm_covariance: GMM covariance type
+            gmm_n_init: Number of GMM initializations
+            gmm_max_iter: Max GMM iterations
+            random_state: Random seed
+        """
+        from sklearn.mixture import GaussianMixture
+        
+        self.n_concepts = n_concepts
+        self.window_size = window_size
+        self.n_top_windows = n_top_windows
+        self.sample_rate = sample_rate
+        self.random_state = random_state
+        
+        # Default features if not specified
+        if features is None:
+            features = [
+                'rms', 'peak_freq', 'crest_factor', 'kurtosis',
+                'zero_crossing_rate', 'spectral_energy', 'spectral_centroid',
+                'mean_amplitude', 'std_amplitude', 'max_amplitude'
+            ]
+        self.features = features
+        
+        # GMM for clustering
+        self.gmm = GaussianMixture(
+            n_components=n_concepts,
+            covariance_type=gmm_covariance,
+            n_init=gmm_n_init,
+            max_iter=gmm_max_iter,
+            random_state=random_state
+        )
+        
+        self.fitted = False
+        self.cluster_centers = None
+    
+    def _extract_windows(
+        self,
+        heatmaps: torch.Tensor
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract top-K most important time windows from heatmaps.
+        
+        Args:
+            heatmaps: Relevance heatmaps (batch, channels, timesteps)
+            
+        Returns:
+            windows: Extracted windows (total_windows, channels, window_size)
+            importances: Window importance scores (total_windows,)
+            sample_counts: Number of windows per sample (batch,)
+        """
+        batch_size, n_channels, n_timesteps = heatmaps.shape
+        
+        # Average across channels to get overall importance
+        importance_signal = heatmaps.abs().mean(dim=1).cpu().numpy()  # (batch, timesteps)
+        
+        windows_list = []
+        importances_list = []
+        sample_counts = []
+        
+        for b in range(batch_size):
+            signal = heatmaps[b].cpu().numpy()  # (channels, timesteps)
+            importance = importance_signal[b]  # (timesteps,)
+            
+            # Compute sliding window importance (non-overlapping windows)
+            window_importances = []
+            window_starts = []
+            
+            i = 0
+            while i + self.window_size <= n_timesteps:
+                start = i
+                end = start + self.window_size
+                
+                # Sum of absolute relevance in window
+                window_imp = importance[start:end].sum()
+                window_importances.append(window_imp)
+                window_starts.append(start)
+                
+                i += self.window_size
+            
+            # Handle final partial window if exists
+            if i < n_timesteps and len(window_starts) > 0:
+                # Include partial window at the end
+                start = n_timesteps - self.window_size
+                end = n_timesteps
+                window_imp = importance[start:end].sum()
+                window_importances.append(window_imp)
+                window_starts.append(start)
+            
+            # Get top-K windows
+            top_k = min(self.n_top_windows, len(window_importances))
+            if top_k == 0:
+                top_k = 1  # At least one window
+            
+            top_indices = np.argsort(window_importances)[-top_k:]
+            
+            for idx in top_indices:
+                start = window_starts[idx]
+                end = start + self.window_size
+                window = signal[:, start:end]
+                windows_list.append(window)
+                importances_list.append(window_importances[idx])
+            
+            sample_counts.append(top_k)
+        
+        windows = np.array(windows_list)  # (total_windows, channels, window_size)
+        importances = np.array(importances_list)  # (total_windows,)
+        sample_counts = np.array(sample_counts)  # (batch,)
+        
+        return windows, importances, sample_counts
+    
+    def _compute_features(
+        self,
+        windows: np.ndarray
+    ) -> np.ndarray:
+        """
+        Compute feature vector for each window.
+        
+        Args:
+            windows: Time windows (n_windows, channels, window_size)
+            
+        Returns:
+            features: Feature matrix (n_windows, n_features)
+        """
+        from scipy import stats
+        from scipy.fft import rfft, rfftfreq
+        
+        n_windows, n_channels, window_size = windows.shape
+        feature_list = []
+        
+        for window in windows:
+            # Average across channels
+            signal = window.mean(axis=0)  # (window_size,)
+            
+            features = {}
+            
+            # RMS amplitude (overall vibration energy)
+            if 'rms' in self.features:
+                features['rms'] = np.sqrt(np.mean(signal**2))
+            
+            # Mean, std, max amplitude
+            if 'mean_amplitude' in self.features:
+                features['mean_amplitude'] = np.abs(signal).mean()
+            if 'std_amplitude' in self.features:
+                features['std_amplitude'] = signal.std()
+            if 'max_amplitude' in self.features:
+                features['max_amplitude'] = np.abs(signal).max()
+            
+            # Crest factor (peak/RMS - impulsiveness)
+            if 'crest_factor' in self.features:
+                rms = np.sqrt(np.mean(signal**2))
+                peak = np.abs(signal).max()
+                features['crest_factor'] = peak / (rms + 1e-6)
+            
+            # Kurtosis (spikiness - fault detection)
+            if 'kurtosis' in self.features:
+                features['kurtosis'] = stats.kurtosis(signal)
+            
+            # Zero crossing rate
+            if 'zero_crossing_rate' in self.features:
+                zero_crossings = np.sum(np.diff(np.sign(signal)) != 0)
+                features['zero_crossing_rate'] = zero_crossings / len(signal)
+            
+            # Frequency-domain features
+            fft_vals = np.abs(rfft(signal))
+            freqs = rfftfreq(window_size, d=1/self.sample_rate)
+            
+            # Peak frequency
+            if 'peak_freq' in self.features:
+                peak_idx = np.argmax(fft_vals)
+                features['peak_freq'] = freqs[peak_idx]
+            
+            # Spectral energy
+            if 'spectral_energy' in self.features:
+                features['spectral_energy'] = np.sum(fft_vals**2)
+            
+            # Spectral centroid
+            if 'spectral_centroid' in self.features:
+                spectral_centroid = np.sum(freqs * fft_vals) / (np.sum(fft_vals) + 1e-6)
+                features['spectral_centroid'] = spectral_centroid
+            
+            # Construct feature vector in consistent order
+            feature_vec = [features[f] for f in self.features if f in features]
+            feature_list.append(feature_vec)
+        
+        return np.array(feature_list)
+    
+    def fit(
+        self,
+        heatmaps: torch.Tensor,
+        labels: Optional[torch.Tensor] = None
+    ):
+        """
+        Fit GMM to discover concepts from heatmaps.
+        
+        Args:
+            heatmaps: Relevance heatmaps (n_samples, channels, timesteps)
+            labels: Optional class labels for per-class normalization
+        """
+        # Extract windows
+        windows, importances, sample_counts = self._extract_windows(heatmaps)
+        
+        # Store sample counts for proper aggregation during extraction
+        self.sample_counts_fit = sample_counts
+        
+        # Compute features
+        features = self._compute_features(windows)
+        
+        # Fit GMM
+        self.gmm.fit(features)
+        self.cluster_centers = self.gmm.means_
+        self.fitted = True
+        
+        print(f"✓ Fitted GMM with {self.n_concepts} concepts from {len(features)} windows")
+    
+    def extract_concepts(
+        self,
+        heatmaps: torch.Tensor,
+        raw_signals: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Extract concept relevances from heatmaps.
+        
+        Args:
+            heatmaps: Relevance heatmaps (batch, channels, timesteps)
+            raw_signals: Optional raw signals (not used, for API compatibility)
+            
+        Returns:
+            Concept relevances (batch, n_concepts)
+        """
+        if not self.fitted:
+            raise ValueError("Must call fit() before extract_concepts()")
+        
+        batch_size = heatmaps.shape[0]
+        
+        # Extract windows
+        windows, importances, sample_counts = self._extract_windows(heatmaps)
+        
+        # Compute features
+        features = self._compute_features(windows)
+        
+        # Assign to concepts
+        assignments = self.gmm.predict(features)
+        
+        # Aggregate by sample using actual window counts
+        concept_relevances = np.zeros((batch_size, self.n_concepts))
+        
+        window_idx = 0
+        for i in range(batch_size):
+            n_windows = sample_counts[i]
+            
+            sample_assignments = assignments[window_idx:window_idx + n_windows]
+            sample_importances = importances[window_idx:window_idx + n_windows]
+            
+            # Sum importance for each concept
+            for c in range(self.n_concepts):
+                mask = sample_assignments == c
+                concept_relevances[i, c] = sample_importances[mask].sum()
+            
+            window_idx += n_windows
+        
+        return torch.from_numpy(concept_relevances).float()
+    
+    def get_concept_labels(self) -> List[str]:
+        """
+        Get human-readable labels for concepts based on cluster centers.
+        
+        Returns:
+            List of concept labels
+        """
+        if not self.fitted or self.cluster_centers is None:
+            return [f"Concept-{i}" for i in range(self.n_concepts)]
+        
+        labels = []
+        for i, center in enumerate(self.cluster_centers):
+            # Create feature dict safely
+            feature_dict = {}
+            for j, f in enumerate(self.features):
+                if j < len(center):
+                    feature_dict[f] = center[j]
+            
+            # Create descriptive label based on feature values
+            descriptors = []
+            
+            # Only add descriptors if we have the relevant features
+            if 'rms' in feature_dict and 'rms' in self.features:
+                # Compare to median of all cluster centers
+                rms_values = [c[self.features.index('rms')] for c in self.cluster_centers if len(c) > self.features.index('rms')]
+                if rms_values and feature_dict['rms'] > np.median(rms_values):
+                    descriptors.append('high-energy')
+            
+            if 'crest_factor' in feature_dict and feature_dict['crest_factor'] > 4:
+                descriptors.append('impulsive')
+            
+            if 'kurtosis' in feature_dict and feature_dict['kurtosis'] > 3:
+                descriptors.append('spiky')
+            
+            if 'peak_freq' in feature_dict:
+                freq = feature_dict['peak_freq']
+                if freq < 20:
+                    descriptors.append('low-freq')
+                elif freq > 100:
+                    descriptors.append('high-freq')
+            
+            if descriptors:
+                # Limit label length for display
+                label = f"Concept-{i}: {'-'.join(descriptors[:3])}"
+            else:
+                label = f"Concept-{i}"
+            
+            labels.append(label)
+        
+        return labels
+    
+    def compute_concept_importance(
+        self,
+        heatmaps: torch.Tensor
+    ) -> np.ndarray:
+        """
+        Compute importance of each concept across dataset.
+        
+        Args:
+            heatmaps: Heatmaps of shape (n_samples, channels, timesteps)
+            
+        Returns:
+            Mean concept relevances of shape (n_concepts,)
+        """
+        concept_relevances = self.extract_concepts(heatmaps)
+        return concept_relevances.mean(dim=0).numpy()
+
+
 if __name__ == "__main__":
     test_filterbank_tcd()
