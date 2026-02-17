@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 from scipy import signal, stats
 from scipy.fft import rfft, rfftfreq
+from scipy.signal import hilbert
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.mixture import GaussianMixture
 from typing import List, Optional, Dict, Tuple
@@ -244,7 +245,6 @@ class VibrationFeatureTCD:
         features = {}
         
         # Compute analytic signal (Hilbert transform)
-        from scipy.signal import hilbert
         analytic_signal = hilbert(signal)
         envelope = np.abs(analytic_signal)
         

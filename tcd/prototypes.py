@@ -116,11 +116,13 @@ class TemporalPrototypeDiscovery:
                 oversample_factor = max(1, int(round(weight)))
                 if oversample_factor > 1:
                     # Replicate samples with slight jitter to avoid exact duplicates
+                    # Use seeded random state for reproducibility
                     n_samples = features_for_gmm.shape[0]
                     oversampled = [features_for_gmm]
+                    rng = np.random.RandomState(self.random_state)
                     for _ in range(oversample_factor - 1):
                         # Add small noise to avoid identical samples
-                        jittered = features_for_gmm + np.random.normal(0, 1e-5, features_for_gmm.shape)
+                        jittered = features_for_gmm + rng.normal(0, 1e-5, features_for_gmm.shape)
                         oversampled.append(jittered)
                     features_for_gmm = np.concatenate(oversampled, axis=0)
                     print(f"Class {class_id}: Oversampled by {oversample_factor}x due to class weight {weight:.2f}")

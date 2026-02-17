@@ -173,7 +173,7 @@ def test_config_validation():
     
     # Phase 1: use_class_weights
     assert 'use_class_weights' in config['analysis']
-    assert config['analysis']['use_class_weights'] == True
+    assert config['analysis']['use_class_weights'] is True
     
     # Phase 3: cnc_validated composite
     assert config['analysis']['composite'] == 'cnc_validated'
