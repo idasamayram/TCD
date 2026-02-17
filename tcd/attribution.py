@@ -52,6 +52,15 @@ class TimeSeriesCondAttribution(CondAttribution):
         Returns:
             Heatmap with shape (B, C, T) preserving all dimensions
         """
+        # Safety check: ensure gradient was computed
+        if data.grad is None:
+            raise RuntimeError(
+                "data.grad is None. This can happen if:\n"
+                "1. Model and data are on different devices (check device placement)\n"
+                "2. Gradient computation was disabled\n"
+                "3. The backward pass didn't reach the input tensor"
+            )
+        
         heatmap = data.grad.detach()
         
         # DO NOT collapse channels - keep full (batch, channels, timesteps) shape

@@ -15,7 +15,7 @@ data:
 analysis:
   layers: ["conv1", "conv2", "conv3", "conv4"]  # Conv layer names for CRP (flat attributes)
   composite: "epsilon_plus"  # LRP composite rule (no canonizers needed - no BatchNorm)
-  batch_size: 32
+  batch_size: 4  # Keep small for CRP - needs full backward graph
 
 tcd:
   variant: "A"  # A: filterbank, B: temporal_descriptors, C: learned_clusters
