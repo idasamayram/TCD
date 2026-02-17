@@ -13,6 +13,9 @@ Computes CRP attribution for entire dataset and saves:
 Usage:
     python scripts/run_analysis.py --config configs/default.yaml --output results/crp_features
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import os
