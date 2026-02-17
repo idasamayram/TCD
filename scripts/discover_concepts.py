@@ -111,8 +111,12 @@ def run_variant_a(
     print(f"{'Concept':<20} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
     print("-"*80)
     for i, label in enumerate(tcd.get_concept_labels()):
-        ratio = importance_class_1[i] / importance_class_0[i] if importance_class_0[i] > 0 else 0
-        print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio:>14.2f}x")
+        if importance_class_0[i] > 0:
+            ratio = importance_class_1[i] / importance_class_0[i]
+            ratio_str = f"{ratio:>14.2f}x"
+        else:
+            ratio_str = "N/A".rjust(15)
+        print(f"{label:<20} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
     print("="*80 + "\n")
     
     # Save results

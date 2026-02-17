@@ -317,28 +317,18 @@ def evaluate_variant_c(
         'faithfulness': faithfulness_class_0,
         'stability': stability_class_0,
         'purity': purity_class_0,
-        **{f"{k}": v for k, v in coverage_metrics_class_0.items()}
+        **coverage_metrics_class_0
     }
     
     metrics_class_1 = {
         'faithfulness': faithfulness_class_1,
         'stability': stability_class_1,
         'purity': purity_class_1,
-        **{f"{k}": v for k, v in coverage_metrics_class_1.items()}
+        **coverage_metrics_class_1
     }
     
-    print("\n" + "="*60)
-    print("PER-CLASS EVALUATION REPORT")
-    print("="*60)
-    print(f"\n{'Metric':<20} {'OK (Class 0)':<20} {'NOK (Class 1)':<20}")
-    print("-"*60)
-    print(f"{'Faithfulness:':<20} {faithfulness_class_0:>19.3f} {faithfulness_class_1:>19.3f}")
-    print(f"{'Stability:':<20} {stability_class_0:>19.3f} {stability_class_1:>19.3f}")
-    print(f"{'Purity:':<20} {purity_class_0:>19.3f} {purity_class_1:>19.3f}")
-    print(f"{'Coverage:':<20} {coverage_metrics_class_0['coverage']:>19.3f} {coverage_metrics_class_1['coverage']:>19.3f}")
-    print(f"{'Balance:':<20} {coverage_metrics_class_0['balance']:>19.3f} {coverage_metrics_class_1['balance']:>19.3f}")
-    print(f"{'Max Coverage:':<20} {coverage_metrics_class_0['max_coverage']:>19.3f} {coverage_metrics_class_1['max_coverage']:>19.3f}")
-    print("="*60 + "\n")
+    # Use the print_evaluation_report function with per-class metrics
+    print_evaluation_report(metrics, per_class_metrics={'class_0': metrics_class_0, 'class_1': metrics_class_1})
     
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
