@@ -14,11 +14,12 @@ data:
 
 analysis:
   layers: ["conv1", "conv2", "conv3", "conv4"]  # Conv layer names for CRP (flat attributes)
-  composite: "epsilon_plus"  # LRP composite rule (no canonizers needed - no BatchNorm)
+  composite: "cnc_validated"  # LRP composite rule validated on CNC vibration data
   batch_size: 4  # Small batch for CRP memory constraints (full backward graph required)
+  use_class_weights: true  # Apply inverse-frequency class weights to concept relevances
 
 tcd:
-  variant: "A"  # A: filterbank/window-based, B: temporal_descriptors, C: learned_clusters
+  variant: "A"  # A: filterbank/window-based, B: temporal_descriptors, C: learned_clusters, D: vibration_features
   n_concepts: 6  # Number of concepts for window-based discovery
   # Variant A (legacy): Frequency bands in Hz (physics-informed for fault detection)
   filterbank_bands: 
@@ -50,10 +51,20 @@ tcd:
   gmm_covariance: "full"
   gmm_n_init: 1
   gmm_max_iter: 10
+  # Variant D: Vibration features
+  vibration_features:
+    window_size: 100         # Window size for feature extraction
+    n_concepts: 30           # Number of top features to select (null = use all)
+    use_feature_selection: true
+    selection_method: "mutual_info"  # 'mutual_info' or 'fisher'
+    n_prototypes: 4
+    gmm_covariance: "full"
+    gmm_n_init: 10
+    gmm_max_iter: 100
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space than conv1
+  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space
   concept_indices: []  # leave empty to auto-select
 
 output:

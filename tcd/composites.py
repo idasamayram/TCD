@@ -8,7 +8,11 @@ No canonizers needed since CNN1D_Wide has no BatchNorm/GroupNorm.
 
 import torch
 import torch.nn as nn
-from zennit.composites import LayerMapComposite, EpsilonPlusFlat as ZennitEpsilonPlusFlat
+from zennit.composites import (
+    LayerMapComposite, 
+    EpsilonPlusFlat as ZennitEpsilonPlusFlat,
+    SpecialFirstLayerMapComposite
+)
 from zennit.rules import Epsilon, ZPlus, Flat, Pass, Gamma, AlphaBeta, Norm
 from zennit.types import Convolution, Linear, AvgPool, Activation
 from typing import Dict, Callable
@@ -19,7 +23,7 @@ def get_composite(name: str = 'epsilon_plus') -> LayerMapComposite:
     Get LRP composite rule for CNN1D models.
     
     Args:
-        name: Composite name - 'epsilon_plus', 'epsilon', 'gradient', or 'custom_cnn1d'
+        name: Composite name - 'epsilon_plus', 'epsilon', 'gradient', 'custom_cnn1d', or 'cnc_validated'
         
     Returns:
         LayerMapComposite for use with CondAttribution
@@ -33,6 +37,8 @@ def get_composite(name: str = 'epsilon_plus') -> LayerMapComposite:
         return GradientComposite()
     elif name == 'custom_cnn1d':
         return CustomCNN1DComposite()
+    elif name == 'cnc_validated':
+        return CNCValidatedComposite()
     else:
         raise ValueError(f"Unknown composite: {name}")
 
@@ -151,6 +157,64 @@ class GradientComposite(LayerMapComposite):
         super().__init__(layer_map=layer_map, canonizers=None)
 
 
+class CNCValidatedComposite(SpecialFirstLayerMapComposite):
+    """
+    CNC-validated LRP composite for vibration fault detection.
+    
+    This composite uses rules validated on CNC vibration data from the thesis work
+    (idasamayram/CNC repo, utils/lrp_utils.py). It applies:
+    - AlphaBeta(alpha=2, beta=1) for the first Conv1d layer
+    - Gamma(gamma=0.25) for other Conv1d layers
+    - Epsilon(epsilon=1e-6) for Linear layers
+    - Norm() for pooling layers
+    - Pass() for activation layers (ReLU, LeakyReLU) and Dropout
+    
+    This composite was specifically tuned for CNC vibration fault detection
+    and provides superior attribution quality compared to generic composites.
+    """
+    
+    def __init__(
+        self,
+        alpha: float = 2.0,
+        beta: float = 1.0,
+        gamma: float = 0.25,
+        epsilon: float = 1e-6,
+        stabilizer: float = 1e-6
+    ):
+        """
+        Initialize CNC-validated composite.
+        
+        Args:
+            alpha: Alpha parameter for AlphaBeta rule on first conv layer
+            beta: Beta parameter for AlphaBeta rule on first conv layer
+            gamma: Gamma parameter for Gamma rule on other conv layers
+            epsilon: Epsilon for Linear layers
+            stabilizer: Numerical stabilizer for rules
+        """
+        # Layer map for all layers except the first conv
+        layer_map = [
+            (nn.ReLU, Pass()),
+            (nn.LeakyReLU, Pass()),
+            (nn.Dropout, Pass()),
+            (nn.MaxPool1d, Norm()),
+            (nn.AdaptiveAvgPool1d, Norm()),
+            (AvgPool, Norm()),
+            (Linear, Epsilon(epsilon=epsilon)),
+            (Convolution, Gamma(gamma=gamma, stabilizer=stabilizer)),
+        ]
+        
+        # First layer map - applies AlphaBeta to first conv layer
+        first_map = [
+            (Convolution, AlphaBeta(alpha=alpha, beta=beta, stabilizer=stabilizer))
+        ]
+        
+        super().__init__(
+            layer_map=layer_map,
+            first_map=first_map,
+            canonizers=None
+        )
+
+
 def test_composite():
     """Test composites on CNN1D model."""
     from models.cnn1d_model import CNN1D_Wide
@@ -158,7 +222,7 @@ def test_composite():
     model = CNN1D_Wide()
     x = torch.randn(2, 3, 2000)
     
-    for name in ['epsilon_plus', 'epsilon', 'gradient', 'custom_cnn1d']:
+    for name in ['epsilon_plus', 'epsilon', 'gradient', 'custom_cnn1d', 'cnc_validated']:
         composite = get_composite(name)
         print(f"✓ Created composite: {name}")
         print(f"  Layer map: {len(composite.layer_map)} rules")

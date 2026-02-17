@@ -99,7 +99,8 @@ class LearnedClusterTCD:
         features: torch.Tensor,
         labels: torch.Tensor,
         outputs: torch.Tensor,
-        sample_ids: Optional[np.ndarray] = None
+        sample_ids: Optional[np.ndarray] = None,
+        class_weights: Optional[torch.Tensor] = None
     ):
         """
         Fit GMM prototypes from concept relevance vectors.
@@ -113,8 +114,9 @@ class LearnedClusterTCD:
             labels: True labels of shape (N,)
             outputs: Model output logits of shape (N, n_classes)
             sample_ids: Optional sample identifiers
+            class_weights: Optional class weights for sample weighting
         """
-        self.prototype_discovery.fit(features, labels, outputs, sample_ids)
+        self.prototype_discovery.fit(features, labels, outputs, sample_ids, class_weights)
         self.fitted = True
         
         print(f"✓ Fitted {self.n_prototypes} prototypes per class")
