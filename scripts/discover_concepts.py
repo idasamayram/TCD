@@ -29,6 +29,7 @@ from pathlib import Path
 from tcd.variants.filterbank import FilterBankTCD, WindowConceptTCD
 from tcd.variants.temporal_descriptors import TemporalDescriptorTCD
 from tcd.variants.learned_clusters import LearnedClusterTCD
+from tcd.variants.vibration_features import VibrationFeatureTCD
 from tcd.visualization import plot_prototype_grid, plot_concept_relevance
 
 
@@ -336,12 +337,155 @@ def run_variant_b(
         f.write("See tcd/variants/temporal_descriptors.py for skeleton.\n")
 
 
+def run_variant_d(
+    features_path: str,
+    output_path: str,
+    config: dict,
+    data_path: str = None
+):
+    """
+    Run Variant D: Comprehensive vibration feature concepts.
+    
+    Args:
+        features_path: Path to CRP features directory
+        output_path: Output directory
+        config: Configuration dict
+        data_path: Path to raw data directory (optional, for loading signals)
+    """
+    print("\n" + "="*60)
+    print("VARIANT D: Comprehensive Vibration Feature Concepts")
+    print("="*60)
+    
+    # Load heatmaps
+    print("Loading heatmaps...")
+    heatmaps_list = []
+    labels_list = []
+    
+    for class_id in [0, 1]:
+        heatmaps_path = os.path.join(features_path, f"heatmaps_class_{class_id}.hdf5")
+        if not os.path.exists(heatmaps_path):
+            print(f"Warning: Heatmaps not found at {heatmaps_path}")
+            continue
+        
+        with h5py.File(heatmaps_path, 'r') as f:
+            heatmaps = np.array(f['heatmaps'])
+            heatmaps_list.append(heatmaps)
+            labels_list.extend([class_id] * len(heatmaps))
+            print(f"  Class {class_id}: {heatmaps.shape}")
+    
+    if not heatmaps_list:
+        print("Error: No heatmaps found. Run run_analysis.py first.")
+        return
+    
+    heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
+    labels = torch.tensor(labels_list).long()
+    
+    # Optionally load raw signals if data path provided
+    signals = None
+    if data_path and os.path.exists(data_path):
+        print("\nNote: Raw signal loading not implemented yet.")
+        print("Using heatmaps only for feature extraction.")
+    
+    # Get config
+    vf_config = config['tcd'].get('vibration_features', {})
+    sample_rate = config['data']['sample_rate']
+    
+    # Initialize VibrationFeatureTCD
+    tcd = VibrationFeatureTCD(
+        sample_rate=sample_rate,
+        window_size=vf_config.get('window_size', 100),
+        n_concepts=vf_config.get('n_concepts', None),
+        use_feature_selection=vf_config.get('use_feature_selection', True),
+        selection_method=vf_config.get('selection_method', 'mutual_info'),
+        n_prototypes=vf_config.get('n_prototypes', 4),
+        gmm_covariance=vf_config.get('gmm_covariance', 'full'),
+        gmm_n_init=vf_config.get('gmm_n_init', 10),
+        gmm_max_iter=vf_config.get('gmm_max_iter', 100)
+    )
+    
+    # Fit on training data
+    print("\nFitting vibration feature extractor...")
+    tcd.fit(heatmaps, labels=labels, signals=signals)
+    
+    # Extract concepts
+    print("\nExtracting concepts...")
+    concept_relevances = tcd.extract_concepts(heatmaps, signals=signals)
+    print(f"Concept relevances shape: {concept_relevances.shape}")
+    
+    # Get concept labels
+    concept_labels = tcd.get_concept_labels()
+    print(f"\nDiscovered {len(concept_labels)} concepts:")
+    for i, label in enumerate(concept_labels[:20]):  # Show first 20
+        print(f"  {i+1}. {label}")
+    if len(concept_labels) > 20:
+        print(f"  ... and {len(concept_labels) - 20} more")
+    
+    # Compute importance per concept (overall and per-class)
+    importance = tcd.compute_concept_importance(heatmaps, signals=signals)
+    
+    # Separate by class
+    class_0_mask = labels == 0
+    class_1_mask = labels == 1
+    heatmaps_class_0 = heatmaps[class_0_mask]
+    heatmaps_class_1 = heatmaps[class_1_mask]
+    
+    importance_class_0 = tcd.compute_concept_importance(heatmaps_class_0, signals=None)
+    importance_class_1 = tcd.compute_concept_importance(heatmaps_class_1, signals=None)
+    
+    print("\n" + "="*60)
+    print("TOP 15 MOST IMPORTANT CONCEPTS (Overall and Per-Class)")
+    print("="*60)
+    
+    # Get top 15 concepts by overall importance
+    top_indices = np.argsort(importance)[-15:][::-1]
+    
+    # Dynamic column width
+    max_label_len = max(len(concept_labels[i]) for i in top_indices)
+    col_width = max(40, max_label_len + 2)
+    
+    print(f"{'Concept':<{col_width}} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
+    print("-" * (col_width + 60))
+    for idx in top_indices:
+        label = concept_labels[idx]
+        if importance_class_0[idx] > 0:
+            ratio = importance_class_1[idx] / importance_class_0[idx]
+            ratio_str = f"{ratio:>14.2f}x"
+        else:
+            ratio_str = "N/A".rjust(15)
+        print(f"{label:<{col_width}} {importance[idx]:>14.4f} {importance_class_0[idx]:>14.4f} {importance_class_1[idx]:>14.4f} {ratio_str}")
+    print("=" * (col_width + 60) + "\n")
+    
+    # Save results
+    os.makedirs(output_path, exist_ok=True)
+    
+    results = {
+        'variant': 'D',
+        'method': 'vibration_features',
+        'concept_labels': concept_labels,
+        'concept_relevances': concept_relevances.numpy(),
+        'labels': labels.numpy(),
+        'importance': importance,
+        'importance_class_0': importance_class_0,
+        'importance_class_1': importance_class_1,
+        'config': vf_config
+    }
+    
+    with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
+    
+    # Save TCD model
+    with open(os.path.join(output_path, 'tcd_model.pkl'), 'wb') as f:
+        pickle.dump(tcd, f)
+    
+    print(f"\n✓ Results saved to {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Discover temporal concepts using TCD variants")
     parser.add_argument('--config', type=str, default='configs/default.yaml',
                        help='Path to config file')
-    parser.add_argument('--variant', type=str, required=True, choices=['A', 'B', 'C'],
-                       help='TCD variant: A (filterbank/window), B (temporal descriptors), C (learned clusters)')
+    parser.add_argument('--variant', type=str, required=True, choices=['A', 'B', 'C', 'D'],
+                       help='TCD variant: A (filterbank/window), B (temporal descriptors), C (learned clusters), D (vibration features)')
     parser.add_argument('--features', type=str, required=True,
                        help='Path to CRP features directory from run_analysis.py')
     parser.add_argument('--output', type=str, required=True,
@@ -368,6 +512,8 @@ def main():
         run_variant_b(args.features, args.output, config)
     elif args.variant == 'C':
         run_variant_c(args.features, args.output, config, layer_name=args.layer, data_path=data_path)
+    elif args.variant == 'D':
+        run_variant_d(args.features, args.output, config, data_path=data_path)
 
 
 if __name__ == "__main__":
