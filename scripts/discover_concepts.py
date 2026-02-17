@@ -146,16 +146,21 @@ def run_variant_a(
     print("\n" + "="*60)
     print("CONCEPT IMPORTANCE (Overall and Per-Class)")
     print("="*60)
-    print(f"{'Concept':<40} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
-    print("-"*124)
+    
+    # Dynamic column width based on max label length
+    max_label_len = max(len(label) for label in concept_labels)
+    col_width = max(40, max_label_len + 2)  # At least 40, or longer if needed
+    
+    print(f"{'Concept':<{col_width}} {'Overall':<15} {'OK (Class 0)':<15} {'NOK (Class 1)':<15} {'Ratio (NOK/OK)':<15}")
+    print("-" * (col_width + 60))
     for i, label in enumerate(concept_labels):
         if importance_class_0[i] > 0:
             ratio = importance_class_1[i] / importance_class_0[i]
             ratio_str = f"{ratio:>14.2f}x"
         else:
             ratio_str = "N/A".rjust(15)
-        print(f"{label:<40} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
-    print("="*124 + "\n")
+        print(f"{label:<{col_width}} {importance[i]:>14.4f} {importance_class_0[i]:>14.4f} {importance_class_1[i]:>14.4f} {ratio_str}")
+    print("=" * (col_width + 60) + "\n")
     
     # Save results
     os.makedirs(output_path, exist_ok=True)

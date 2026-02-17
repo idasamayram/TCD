@@ -344,7 +344,7 @@ class WindowConceptTCD:
     def _extract_windows(
         self,
         heatmaps: torch.Tensor
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract top-K most important time windows from heatmaps.
         
@@ -352,8 +352,9 @@ class WindowConceptTCD:
             heatmaps: Relevance heatmaps (batch, channels, timesteps)
             
         Returns:
-            windows: Extracted windows (batch * n_top_windows, channels, window_size)
-            importances: Window importance scores (batch * n_top_windows,)
+            windows: Extracted windows (total_windows, channels, window_size)
+            importances: Window importance scores (total_windows,)
+            sample_counts: Number of windows per sample (batch,)
         """
         batch_size, n_channels, n_timesteps = heatmaps.shape
         
@@ -362,29 +363,42 @@ class WindowConceptTCD:
         
         windows_list = []
         importances_list = []
+        sample_counts = []
         
         for b in range(batch_size):
             signal = heatmaps[b].cpu().numpy()  # (channels, timesteps)
             importance = importance_signal[b]  # (timesteps,)
             
-            # Compute sliding window importance
-            n_windows = (n_timesteps - self.window_size) // self.window_size + 1
+            # Compute sliding window importance (non-overlapping windows)
             window_importances = []
             window_starts = []
             
-            for i in range(n_windows):
-                start = i * self.window_size
+            i = 0
+            while i + self.window_size <= n_timesteps:
+                start = i
                 end = start + self.window_size
-                if end > n_timesteps:
-                    break
                 
                 # Sum of absolute relevance in window
+                window_imp = importance[start:end].sum()
+                window_importances.append(window_imp)
+                window_starts.append(start)
+                
+                i += self.window_size
+            
+            # Handle final partial window if exists
+            if i < n_timesteps and len(window_starts) > 0:
+                # Include partial window at the end
+                start = n_timesteps - self.window_size
+                end = n_timesteps
                 window_imp = importance[start:end].sum()
                 window_importances.append(window_imp)
                 window_starts.append(start)
             
             # Get top-K windows
             top_k = min(self.n_top_windows, len(window_importances))
+            if top_k == 0:
+                top_k = 1  # At least one window
+            
             top_indices = np.argsort(window_importances)[-top_k:]
             
             for idx in top_indices:
@@ -393,11 +407,14 @@ class WindowConceptTCD:
                 window = signal[:, start:end]
                 windows_list.append(window)
                 importances_list.append(window_importances[idx])
+            
+            sample_counts.append(top_k)
         
-        windows = np.array(windows_list)  # (batch * n_top_windows, channels, window_size)
-        importances = np.array(importances_list)  # (batch * n_top_windows,)
+        windows = np.array(windows_list)  # (total_windows, channels, window_size)
+        importances = np.array(importances_list)  # (total_windows,)
+        sample_counts = np.array(sample_counts)  # (batch,)
         
-        return windows, importances
+        return windows, importances, sample_counts
     
     def _compute_features(
         self,
@@ -488,7 +505,10 @@ class WindowConceptTCD:
             labels: Optional class labels for per-class normalization
         """
         # Extract windows
-        windows, importances = self._extract_windows(heatmaps)
+        windows, importances, sample_counts = self._extract_windows(heatmaps)
+        
+        # Store sample counts for proper aggregation during extraction
+        self.sample_counts_fit = sample_counts
         
         # Compute features
         features = self._compute_features(windows)
@@ -521,7 +541,7 @@ class WindowConceptTCD:
         batch_size = heatmaps.shape[0]
         
         # Extract windows
-        windows, importances = self._extract_windows(heatmaps)
+        windows, importances, sample_counts = self._extract_windows(heatmaps)
         
         # Compute features
         features = self._compute_features(windows)
@@ -529,22 +549,22 @@ class WindowConceptTCD:
         # Assign to concepts
         assignments = self.gmm.predict(features)
         
-        # Aggregate by sample
+        # Aggregate by sample using actual window counts
         concept_relevances = np.zeros((batch_size, self.n_concepts))
         
+        window_idx = 0
         for i in range(batch_size):
-            start = i * self.n_top_windows
-            end = start + self.n_top_windows
-            if end > len(assignments):
-                end = len(assignments)
+            n_windows = sample_counts[i]
             
-            sample_assignments = assignments[start:end]
-            sample_importances = importances[start:end]
+            sample_assignments = assignments[window_idx:window_idx + n_windows]
+            sample_importances = importances[window_idx:window_idx + n_windows]
             
             # Sum importance for each concept
             for c in range(self.n_concepts):
                 mask = sample_assignments == c
                 concept_relevances[i, c] = sample_importances[mask].sum()
+            
+            window_idx += n_windows
         
         return torch.from_numpy(concept_relevances).float()
     
@@ -560,22 +580,28 @@ class WindowConceptTCD:
         
         labels = []
         for i, center in enumerate(self.cluster_centers):
-            # Characterize each concept by its dominant features
-            feature_dict = {f: center[j] for j, f in enumerate(self.features) if j < len(center)}
+            # Create feature dict safely
+            feature_dict = {}
+            for j, f in enumerate(self.features):
+                if j < len(center):
+                    feature_dict[f] = center[j]
             
             # Create descriptive label based on feature values
-            # High RMS -> high energy
-            # High crest factor -> impulsive
-            # High kurtosis -> spiky/fault-like
-            # High peak_freq -> high frequency
-            
             descriptors = []
-            if 'rms' in feature_dict and feature_dict['rms'] > np.median([c[self.features.index('rms')] for c in self.cluster_centers if 'rms' in self.features]):
-                descriptors.append('high-energy')
+            
+            # Only add descriptors if we have the relevant features
+            if 'rms' in feature_dict and 'rms' in self.features:
+                # Compare to median of all cluster centers
+                rms_values = [c[self.features.index('rms')] for c in self.cluster_centers if len(c) > self.features.index('rms')]
+                if rms_values and feature_dict['rms'] > np.median(rms_values):
+                    descriptors.append('high-energy')
+            
             if 'crest_factor' in feature_dict and feature_dict['crest_factor'] > 4:
                 descriptors.append('impulsive')
+            
             if 'kurtosis' in feature_dict and feature_dict['kurtosis'] > 3:
                 descriptors.append('spiky')
+            
             if 'peak_freq' in feature_dict:
                 freq = feature_dict['peak_freq']
                 if freq < 20:
@@ -584,7 +610,8 @@ class WindowConceptTCD:
                     descriptors.append('high-freq')
             
             if descriptors:
-                label = f"Concept-{i}: {'-'.join(descriptors)}"
+                # Limit label length for display
+                label = f"Concept-{i}: {'-'.join(descriptors[:3])}"
             else:
                 label = f"Concept-{i}"
             

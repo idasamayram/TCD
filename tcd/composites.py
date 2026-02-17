@@ -42,12 +42,17 @@ class CustomCNN1DComposite(LayerMapComposite):
     Custom LRP composite matching CNC repo's proven rules.
     
     Based on idasamayram/CNC utils/lrp_utils.py layer map:
-    - Conv1d: Gamma rule (gamma=0.25, stabilizer=1e-6)
-    - First Conv1d: AlphaBeta rule (alpha=2, beta=1, stabilizer=1e-6)
+    - Conv1d: Gamma rule (gamma=0.25)
     - Linear: Epsilon rule (epsilon=1e-6)
     - ReLU: Pass
     - MaxPool1d: Norm rule
     - AdaptiveAvgPool1d: Norm rule
+    
+    Note: The CNC repo uses AlphaBeta for the first Conv1d layer, but this
+    requires layer-specific rule selection which is not directly supported
+    by zennit's LayerMapComposite. For full CNC compatibility including
+    AlphaBeta on the first layer, consider implementing a custom composite
+    with layer name checking.
     
     This composite has been validated on CNC vibration data for fault detection.
     """
@@ -55,8 +60,6 @@ class CustomCNN1DComposite(LayerMapComposite):
     def __init__(
         self,
         gamma: float = 0.25,
-        alpha: float = 2.0,
-        beta: float = 1.0,
         epsilon: float = 1e-6
     ):
         """
@@ -64,8 +67,6 @@ class CustomCNN1DComposite(LayerMapComposite):
         
         Args:
             gamma: Gamma parameter for Conv1d layers
-            alpha: Alpha parameter for first Conv1d layer (not used in this implementation)
-            beta: Beta parameter for first Conv1d layer (not used in this implementation)
             epsilon: Stabilizer for Epsilon rule on Linear layers
         """
         # Build layer map with special handling for pooling and conv layers
