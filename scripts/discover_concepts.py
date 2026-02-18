@@ -694,20 +694,24 @@ def run_variant_b(
     print("\n" + "="*60)
     print("PER-CLASS CONCEPT IMPORTANCE")
     print("="*60)
-    
+
     for class_id in [0, 1]:
         class_mask = labels == class_id
         class_assignments = concept_assignments[class_mask]
-        
+
+        # Convert to numpy if it's a torch tensor
+        if isinstance(class_assignments, torch.Tensor):
+            class_assignments = class_assignments.numpy()
+
         # Validate that assignments are integers
         if not np.issubdtype(class_assignments.dtype, np.integer):
             print(f"  Warning: Converting non-integer assignments to int for class {class_id}")
             class_assignments = class_assignments.astype(np.int64)
-        
+
         # Count concept occurrences
-        # Use int() conversion for safety even after validation
-        concept_counts = np.bincount(class_assignments.flatten().astype(int), 
+        concept_counts = np.bincount(class_assignments.flatten().astype(int),
                                      minlength=n_concepts)
+
         total_segments = concept_counts.sum()
         
         class_name = "OK" if class_id == 0 else "NOK"
