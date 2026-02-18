@@ -81,6 +81,13 @@ tcd:
     - [50, 100]   # Mid-frequency
     - [100, 200]  # Fault signatures (~150Hz)
   
+  # Variant B: Temporal descriptor concepts
+  descriptor_types:
+    - slope
+    - peak
+    - autocorr
+    - spectral
+  
   # Variant A (new): Window-based concept discovery (data-driven)
   window_concept:
     window_size: 40       # timesteps per window (0.1s at 400Hz)

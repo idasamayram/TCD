@@ -562,7 +562,7 @@ def run_variant_b(
     config: dict
 ):
     """
-    Run Variant B: Temporal descriptor concepts (SKELETON).
+    Run Variant B: Temporal descriptor concepts.
     
     Args:
         features_path: Path to CRP features directory
@@ -570,21 +570,126 @@ def run_variant_b(
         config: Configuration dict
     """
     print("\n" + "="*60)
-    print("VARIANT B: Temporal Descriptor Concepts (SKELETON)")
+    print("VARIANT B: Temporal Descriptor Concepts")
     print("="*60)
     
-    print("\nVariant B is not fully implemented yet.")
-    print("See tcd/variants/temporal_descriptors.py for TODO items.")
-    print("\nKey steps to implement:")
-    print("  1. Extract temporal descriptors (slope, peak, autocorr, spectral)")
-    print("  2. Cluster descriptors with k-means or GMM")
-    print("  3. Assign segments to concepts")
+    # Load heatmaps
+    print("\nLoading heatmaps...")
+    heatmaps_list = []
+    labels_list = []
     
-    # Create placeholder output
+    for class_id in [0, 1]:
+        heatmaps_path = os.path.join(features_path, f"heatmaps_class_{class_id}.hdf5")
+        if not os.path.exists(heatmaps_path):
+            print(f"Warning: Heatmaps not found at {heatmaps_path}")
+            continue
+        
+        with h5py.File(heatmaps_path, 'r') as f:
+            heatmaps = np.array(f['heatmaps'])
+            heatmaps_list.append(heatmaps)
+            labels_list.extend([class_id] * len(heatmaps))
+            print(f"  Class {class_id}: {heatmaps.shape}")
+    
+    if not heatmaps_list:
+        print("Error: No heatmaps found. Run run_analysis.py first.")
+        return
+    
+    heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
+    labels = torch.tensor(labels_list).long()
+    
+    # Get config for Variant B
+    n_concepts = config['tcd'].get('n_concepts', 5)
+    descriptor_types = config['tcd'].get('descriptor_types', ['slope', 'peak', 'autocorr', 'spectral'])
+    
+    print(f"\nInitializing TemporalDescriptorTCD with {n_concepts} concepts")
+    print(f"  Descriptor types: {descriptor_types}")
+    
+    # Create TemporalDescriptorTCD instance
+    tcd = TemporalDescriptorTCD(
+        n_concepts=n_concepts,
+        descriptor_types=descriptor_types,
+        clustering_method='kmeans'
+    )
+    
+    # Fit: extract segments, compute descriptors, cluster them
+    print("\nFitting temporal descriptor clustering...")
+    tcd.fit(heatmaps)
+    
+    # Extract concepts: assign segments to clusters
+    print("\nExtracting concept assignments...")
+    concept_assignments = tcd.extract_concepts(heatmaps)
+    print(f"Concept assignments shape: {concept_assignments.shape}")
+    
+    # Print discovered temporal concepts
+    print("\n" + "="*60)
+    print("DISCOVERED TEMPORAL CONCEPTS")
+    print("="*60)
+    
+    concept_labels = tcd.get_concept_labels()
+    for i, label in enumerate(concept_labels):
+        print(f"  Concept {i}: {label}")
+    
+    # Compute per-class concept importance
+    print("\n" + "="*60)
+    print("PER-CLASS CONCEPT IMPORTANCE")
+    print("="*60)
+    
+    for class_id in [0, 1]:
+        class_mask = labels == class_id
+        class_assignments = concept_assignments[class_mask]
+        
+        # Count concept occurrences
+        concept_counts = np.bincount(class_assignments.flatten().astype(int), 
+                                     minlength=n_concepts)
+        total_segments = concept_counts.sum()
+        
+        class_name = "OK" if class_id == 0 else "NOK"
+        print(f"\nClass {class_id} ({class_name}):")
+        for i in range(n_concepts):
+            pct = 100.0 * concept_counts[i] / (total_segments + 1e-10)
+            print(f"  Concept {i}: {concept_counts[i]} segments ({pct:.1f}%)")
+    
+    # Print cluster statistics if available
+    if hasattr(tcd, 'cluster_centers_'):
+        print("\n" + "="*60)
+        print("CLUSTER CENTER STATISTICS")
+        print("="*60)
+        
+        centers = tcd.cluster_centers_
+        print(f"Cluster centers shape: {centers.shape}")
+        
+        for i in range(n_concepts):
+            center = centers[i]
+            print(f"\nConcept {i}:")
+            print(f"  Mean: {center.mean():.4f}")
+            print(f"  Std: {center.std():.4f}")
+            print(f"  Min: {center.min():.4f}")
+            print(f"  Max: {center.max():.4f}")
+    
+    # Save results
     os.makedirs(output_path, exist_ok=True)
-    with open(os.path.join(output_path, 'README.txt'), 'w') as f:
-        f.write("Variant B is not yet implemented.\n")
-        f.write("See tcd/variants/temporal_descriptors.py for skeleton.\n")
+    
+    results = {
+        'variant': 'B',
+        'n_concepts': n_concepts,
+        'descriptor_types': descriptor_types,
+        'concept_labels': concept_labels,
+        'concept_assignments': concept_assignments.numpy(),
+        'labels': labels.numpy()
+    }
+    
+    if hasattr(tcd, 'cluster_centers_'):
+        results['cluster_centers'] = tcd.cluster_centers_
+    
+    with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
+    
+    # Save TCD model
+    with open(os.path.join(output_path, 'tcd_model.pkl'), 'wb') as f:
+        pickle.dump(tcd, f)
+    
+    print(f"\n✓ Results saved to {output_path}")
+    print("="*60 + "\n")
 
 
 def run_variant_d(
