@@ -445,7 +445,7 @@ def run_variant_c(
                 print("\n" + "="*60)
                 print("STATISTICAL TESTS (OK vs NOK)")
                 print("="*60)
-                print(f"{'Feature':<25} {'p-value':<12} {'Cohen\'s d':<12} {'Significant':<12}")
+                print(f"{'Feature':<25} {'p-value':<12} {'Cohens_d':<12} {'Significant':<12}")
                 print("-"*60)
                 
                 for feat_name, test in window_analysis_results['statistical_tests'].items():
