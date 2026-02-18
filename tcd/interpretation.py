@@ -20,7 +20,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from sklearn.mixture import GaussianMixture
 import scipy.stats as stats
-from scipy import signal as scipy_signal
+from scipy.signal  import welch, find_peaks
 import warnings
 
 
@@ -147,7 +147,7 @@ def extract_sample_features(
         # Frequency-domain features
         if len(window_sig) >= 4:
             try:
-                freqs, psd = scipy_signal.welch(
+                freqs, psd = welch(
                     window_sig, 
                     fs=sample_rate, 
                     nperseg=min(len(window_sig), 256)
