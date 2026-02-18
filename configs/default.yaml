@@ -130,6 +130,12 @@ evaluation:
   robustness_analysis: true  # Enable deviation-based robustness analysis
   deviation_threshold: 2.0  # Flag samples with ||Δ|| > mean + threshold*std
 
+robustness:
+  n_samples: 100          # Number of samples to test
+  noise_levels: [0.01, 0.05, 0.1, 0.2]  # Gaussian noise std as fraction of signal std
+  shift_amounts: [10, 25, 50]  # Circular shift amounts in timesteps
+  test_channel_dropout: true   # Test zeroing out individual channels
+
 output:
   results_dir: "results"
   plots_dir: "plots"

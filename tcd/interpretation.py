@@ -19,10 +19,16 @@ import torch
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from sklearn.mixture import GaussianMixture
+import scipy.stats as stats
+from scipy import signal as scipy_signal
+import warnings
 
 
 # Class name mapping (can be customized per dataset)
 DEFAULT_CLASS_NAMES = {0: "OK", 1: "NOK"}
+
+# Constants for feature extraction
+EPSILON_SPECTRAL = 1e-10  # Small epsilon to prevent division by zero in spectral features
 
 
 def get_class_name(class_id: int, class_names: Optional[Dict[int, str]] = None) -> str:
@@ -39,6 +45,150 @@ def get_class_name(class_id: int, class_names: Optional[Dict[int, str]] = None) 
     if class_names is None:
         class_names = DEFAULT_CLASS_NAMES
     return class_names.get(class_id, f"Class_{class_id}")
+
+
+def extract_sample_features(
+    heatmap: torch.Tensor,
+    signal: torch.Tensor,
+    window_size: int = 40,
+    n_top_windows: int = 10,
+    sample_rate: int = 400
+) -> List[Dict[str, Any]]:
+    """
+    Extract features from a single sample's high-relevance windows.
+    
+    CNC-style per-sample extraction matching idasamayram/CNC/evaluation/time_faithfulness.py.
+    
+    Algorithm:
+    1. For each sample, compute per-channel, per-window mean absolute relevance
+    2. Flatten to (n_channels × n_windows_per_channel) and sort descending
+    3. Take top-K windows (with channel info preserved)
+    4. Extract features per window: avg_amplitude, max_amplitude, std_amplitude,
+       skewness, kurtosis, peak_freq, spectral_energy, etc.
+    
+    Args:
+        heatmap: Heatmap relevance of shape (C, T) for a single sample
+        signal: Raw signal of shape (C, T) for a single sample
+        window_size: Window size in timesteps
+        n_top_windows: Number of top windows to extract
+        sample_rate: Sampling rate in Hz
+        
+    Returns:
+        List of dictionaries, each containing:
+        {
+            'window_idx': int,
+            'channel_idx': int,
+            'start': int,
+            'end': int,
+            'relevance': float,
+            'avg_amplitude': float,
+            'max_amplitude': float,
+            'std_amplitude': float,
+            'skewness': float,
+            'kurtosis': float,
+            'peak_freq': float,
+            'spectral_energy': float,
+            'spectral_centroid': float,
+            'zero_crossing_rate': float
+        }
+    """
+    n_channels, n_timesteps = heatmap.shape
+    n_windows = n_timesteps // window_size
+    
+    # Compute relevance per window per channel
+    window_relevances = []
+    window_info = []
+    
+    for channel_idx in range(n_channels):
+        for win_idx in range(n_windows):
+            start_pos = win_idx * window_size
+            end_pos = min(start_pos + window_size, n_timesteps)
+            
+            # Compute window relevance (mean absolute relevance)
+            window_heat = heatmap[channel_idx, start_pos:end_pos]
+            window_rel = torch.abs(window_heat).mean().item()
+            
+            window_relevances.append(window_rel)
+            window_info.append({
+                'channel_idx': channel_idx,
+                'window_idx': win_idx,
+                'start': start_pos,
+                'end': end_pos
+            })
+    
+    # Get top-K windows
+    window_relevances = np.array(window_relevances)
+    top_k = min(n_top_windows, len(window_relevances))
+    top_indices = np.argsort(window_relevances)[-top_k:][::-1]
+    
+    # Extract features for each top window
+    window_features = []
+    
+    for idx in top_indices:
+        info = window_info[idx]
+        channel_idx = info['channel_idx']
+        start_pos = info['start']
+        end_pos = info['end']
+        relevance = window_relevances[idx]
+        
+        # Extract signal window
+        window_sig = signal[channel_idx, start_pos:end_pos].cpu().numpy()
+        
+        # Time-domain features
+        avg_amplitude = np.abs(window_sig).mean()
+        max_amplitude = np.abs(window_sig).max()
+        std_amplitude = window_sig.std()
+        rms = np.sqrt(np.mean(window_sig**2))
+        
+        # Statistical features
+        skewness = float(stats.skew(window_sig)) if len(window_sig) > 2 else 0.0
+        kurtosis = float(stats.kurtosis(window_sig)) if len(window_sig) > 2 else 0.0
+        
+        # Frequency-domain features
+        if len(window_sig) >= 4:
+            try:
+                freqs, psd = scipy_signal.welch(
+                    window_sig, 
+                    fs=sample_rate, 
+                    nperseg=min(len(window_sig), 256)
+                )
+                peak_freq_idx = np.argmax(psd)
+                peak_freq = freqs[peak_freq_idx]
+                spectral_energy = np.sum(psd)
+                spectral_centroid = np.sum(freqs * psd) / (np.sum(psd) + EPSILON_SPECTRAL)
+            except (ValueError, ZeroDivisionError) as e:
+                # Welch computation can fail on certain signal properties
+                peak_freq = 0.0
+                spectral_energy = 0.0
+                spectral_centroid = 0.0
+        else:
+            peak_freq = 0.0
+            spectral_energy = 0.0
+            spectral_centroid = 0.0
+        
+        # Zero-crossing rate
+        zero_crossings = np.sum(np.diff(np.sign(window_sig)) != 0)
+        zero_crossing_rate = zero_crossings / len(window_sig) if len(window_sig) > 1 else 0.0
+        
+        window_features.append({
+            'window_idx': info['window_idx'],
+            'channel_idx': channel_idx,
+            'start': start_pos,
+            'end': end_pos,
+            'relevance': float(relevance),
+            'avg_amplitude': float(avg_amplitude),
+            'max_amplitude': float(max_amplitude),
+            'std_amplitude': float(std_amplitude),
+            'rms': float(rms),
+            'skewness': float(skewness),
+            'kurtosis': float(kurtosis),
+            'peak_freq': float(peak_freq),
+            'spectral_energy': float(spectral_energy),
+            'spectral_centroid': float(spectral_centroid),
+            'zero_crossing_rate': float(zero_crossing_rate)
+        })
+    
+    return window_features
 
 
 class ConceptInterpreter:
@@ -84,20 +234,29 @@ class ConceptInterpreter:
     
     def interpret_prototypes(
         self,
-        global_windows: Dict[int, List[Tuple[int, int, float]]],
-        heatmaps: Optional[torch.Tensor] = None,
-        signals: Optional[torch.Tensor] = None,
-        top_k_filters: int = 10
+        heatmaps: torch.Tensor,
+        signals: torch.Tensor,
+        window_size: int = 40,
+        n_top_windows: int = 10,
+        sample_rate: int = 400,
+        top_k_filters: int = 10,
+        global_windows: Optional[Dict[int, List[Tuple[int, int, float]]]] = None
     ) -> Dict[int, Dict[int, Dict[str, Any]]]:
         """
         Generate interpretations for all prototypes.
         
+        Uses CNC-style per-sample feature extraction from high-relevance windows.
+        The global_windows parameter is now optional and ignored - feature extraction
+        is done per-sample as proven effective in idasamayram/CNC.
+        
         Args:
-            global_windows: Important window positions from GlobalWindowAnalysis
-                           Format: {class_id: [(start, end, importance), ...]}
-            heatmaps: Optional heatmap relevances of shape (N, C, T)
-            signals: Optional raw signals of shape (N, C, T)
+            heatmaps: Heatmap relevances of shape (N, C, T)
+            signals: Raw signals of shape (N, C, T)
+            window_size: Window size in timesteps for per-sample extraction
+            n_top_windows: Number of top windows to extract per sample
+            sample_rate: Sampling rate in Hz
             top_k_filters: Number of top filters to analyze per prototype
+            global_windows: Optional (deprecated) - kept for backward compatibility
             
         Returns:
             Dictionary structure:
@@ -109,16 +268,27 @@ class ConceptInterpreter:
                         'coverage': float,
                         'description': str,
                         'filter_summary': str,
-                        'window_features': Optional[Dict]
+                        'window_features': Dict with aggregated per-sample features
                     }
                 }
             }
         """
+        # Warn if deprecated parameter is used
+        if global_windows is not None:
+            warnings.warn(
+                "The 'global_windows' parameter is deprecated and will be removed in a future version. "
+                "Feature extraction now uses per-sample high-relevance windows instead of global positions.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
         interpretations = {}
         
         for class_id, gmm in self.gmms.items():
             class_mask = self.labels == class_id
             class_features = self.features[class_mask]  # (N_class, n_filters)
+            class_heatmaps = heatmaps[class_mask]  # (N_class, C, T)
+            class_signals = signals[class_mask]  # (N_class, C, T)
             n_class_samples = class_features.shape[0]
             
             # Assign samples to prototypes
@@ -145,13 +315,18 @@ class ConceptInterpreter:
                 # Generate filter summary
                 filter_summary = self._generate_filter_summary(top_filters, self.layer_name)
                 
-                # Analyze window features if provided
+                # Analyze window features using per-sample extraction
                 window_features = None
-                if heatmaps is not None and class_id in global_windows:
+                if n_proto_samples > 0:
+                    proto_heatmaps = class_heatmaps[proto_mask]
+                    proto_signals = class_signals[proto_mask]
+                    
                     window_features = self._analyze_window_features(
-                        heatmaps[class_mask][proto_mask],
-                        global_windows[class_id],
-                        signals[class_mask][proto_mask] if signals is not None else None
+                        proto_heatmaps,
+                        proto_signals,
+                        window_size,
+                        n_top_windows,
+                        sample_rate
                     )
                 
                 # Generate human-readable description
@@ -201,61 +376,89 @@ class ConceptInterpreter:
     def _analyze_window_features(
         self,
         proto_heatmaps: torch.Tensor,
-        window_positions: List[Tuple[int, int, float]],
-        proto_signals: Optional[torch.Tensor] = None
+        proto_signals: torch.Tensor,
+        window_size: int,
+        n_top_windows: int,
+        sample_rate: int
     ) -> Dict[str, Any]:
         """
-        Analyze vibration features at globally-important windows for this prototype.
+        Analyze vibration features using CNC-style per-sample extraction.
+        
+        For each sample assigned to this prototype:
+        1. Extract features from its own top-K high-relevance windows
+        2. Aggregate statistics across all samples in the prototype
+        
+        This matches the proven approach from idasamayram/CNC/evaluation/time_faithfulness.py
         
         Args:
             proto_heatmaps: Heatmaps for samples assigned to this prototype (N_proto, C, T)
-            window_positions: Global window positions [(start, end, importance), ...]
-            proto_signals: Optional raw signals (N_proto, C, T)
+            proto_signals: Raw signals for samples assigned to this prototype (N_proto, C, T)
+            window_size: Window size in timesteps
+            n_top_windows: Number of top windows to extract per sample
+            sample_rate: Sampling rate in Hz
             
         Returns:
-            Dictionary with feature statistics
+            Dictionary with aggregated feature statistics:
+            {
+                'n_samples': int,
+                'n_windows_per_sample': int,
+                'feature_stats': {
+                    'avg_amplitude': {'mean': float, 'std': float},
+                    'max_amplitude': {...},
+                    ...
+                }
+            }
         """
         if proto_heatmaps.shape[0] == 0:
             return None
         
-        # Use top 3 windows for analysis
-        top_windows = window_positions[:3]
+        n_samples = proto_heatmaps.shape[0]
         
-        window_stats = []
-        for win_idx, (start, end, importance) in enumerate(top_windows):
-            window_heatmaps = proto_heatmaps[:, :, start:end]
+        # Collect features from all samples
+        all_window_features = []
+        
+        for sample_idx in range(n_samples):
+            sample_heatmap = proto_heatmaps[sample_idx]  # (C, T)
+            sample_signal = proto_signals[sample_idx]  # (C, T)
             
-            # Compute simple statistics
-            stats = {
-                'window_idx': win_idx,
-                'start': start,
-                'end': end,
-                'global_importance': importance,
-                'mean_relevance': torch.abs(window_heatmaps).mean().item(),
-                'max_relevance': torch.abs(window_heatmaps).max().item(),
-                'std_relevance': torch.abs(window_heatmaps).std().item()
+            # Extract features from this sample's high-relevance windows
+            sample_windows = extract_sample_features(
+                sample_heatmap,
+                sample_signal,
+                window_size,
+                n_top_windows,
+                sample_rate
+            )
+            
+            all_window_features.extend(sample_windows)
+        
+        # Aggregate statistics across all windows
+        if len(all_window_features) == 0:
+            return None
+        
+        # Compute mean and std for each feature
+        feature_names = [
+            'avg_amplitude', 'max_amplitude', 'std_amplitude', 'rms',
+            'skewness', 'kurtosis', 'peak_freq', 'spectral_energy',
+            'spectral_centroid', 'zero_crossing_rate', 'relevance'
+        ]
+        
+        feature_stats = {}
+        for feature_name in feature_names:
+            values = [w[feature_name] for w in all_window_features]
+            feature_stats[feature_name] = {
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values)),
+                'min': float(np.min(values)),
+                'max': float(np.max(values)),
+                'median': float(np.median(values))
             }
-            
-            # If signals provided, extract basic features
-            if proto_signals is not None:
-                window_signals = proto_signals[:, :, start:end]
-                
-                # RMS
-                rms = torch.sqrt((window_signals ** 2).mean(dim=(1, 2))).mean().item()
-                stats['rms'] = rms
-                
-                # Peak amplitude
-                peak = torch.abs(window_signals).max(dim=2)[0].mean().item()
-                stats['peak_amplitude'] = peak
-                
-                # Crest factor
-                stats['crest_factor'] = peak / (rms + 1e-8)
-            
-            window_stats.append(stats)
         
         return {
-            'n_windows_analyzed': len(top_windows),
-            'window_stats': window_stats
+            'n_samples': n_samples,
+            'n_windows_per_sample': n_top_windows,
+            'total_windows_analyzed': len(all_window_features),
+            'feature_stats': feature_stats
         }
     
     def _generate_description(
@@ -276,7 +479,7 @@ class ConceptInterpreter:
             top_filters: Top filter contributions
             n_samples: Number of samples assigned to this prototype
             coverage: Fraction of class samples assigned to this prototype
-            window_features: Optional window feature analysis
+            window_features: Optional per-sample window feature analysis
             
         Returns:
             Human-readable description string
@@ -298,19 +501,35 @@ class ConceptInterpreter:
         if neg_filters:
             description_parts.append(f"- Negative contributions from filters: {neg_filters[:3]}")
         
-        # Add window feature information if available
-        if window_features and window_features.get('window_stats'):
-            window_stats = window_features['window_stats'][0]  # Use first window
+        # Add per-sample window feature information if available
+        if window_features:
+            n_samples_analyzed = window_features['n_samples']
+            n_windows = window_features['total_windows_analyzed']
+            feature_stats = window_features['feature_stats']
+            
             description_parts.append(
-                f"- Primary temporal region: timesteps {window_stats['start']}-{window_stats['end']} "
-                f"(mean relevance: {window_stats['mean_relevance']:.4f})"
+                f"- Analyzed {n_windows} high-relevance windows from {n_samples_analyzed} samples"
             )
             
-            if 'rms' in window_stats:
+            # Add key signal characteristics
+            if 'rms' in feature_stats:
+                rms_mean = feature_stats['rms']['mean']
+                peak_mean = feature_stats['max_amplitude']['mean']
                 description_parts.append(
-                    f"- Signal characteristics: RMS={window_stats['rms']:.4f}, "
-                    f"peak={window_stats.get('peak_amplitude', 0):.4f}, "
-                    f"crest_factor={window_stats.get('crest_factor', 0):.2f}"
+                    f"- Signal characteristics: RMS={rms_mean:.4f}, peak={peak_mean:.4f}"
+                )
+            
+            if 'peak_freq' in feature_stats:
+                freq_mean = feature_stats['peak_freq']['mean']
+                freq_std = feature_stats['peak_freq']['std']
+                description_parts.append(
+                    f"- Dominant frequency: {freq_mean:.1f} ± {freq_std:.1f} Hz"
+                )
+            
+            if 'kurtosis' in feature_stats:
+                kurt_mean = feature_stats['kurtosis']['mean']
+                description_parts.append(
+                    f"- Kurtosis: {kurt_mean:.2f} (>3 indicates impulse-like vibration)"
                 )
         
         return "\n".join(description_parts)
@@ -351,13 +570,20 @@ class ConceptInterpreter:
                     
                     if proto.get('window_features'):
                         wf = proto['window_features']
-                        print(f"\n  Window Analysis ({wf['n_windows_analyzed']} windows):")
-                        for ws in wf['window_stats'][:2]:  # Show top 2 windows
-                            print(f"    Window {ws['window_idx']} (timesteps {ws['start']}-{ws['end']}):")
-                            print(f"      Global importance: {ws['global_importance']:.6f}")
-                            print(f"      Mean relevance: {ws['mean_relevance']:.6f}")
-                            if 'rms' in ws:
-                                print(f"      RMS: {ws['rms']:.4f}, Crest factor: {ws.get('crest_factor', 0):.2f}")
+                        print(f"\n  Per-Sample Window Analysis:")
+                        print(f"    Analyzed {wf['total_windows_analyzed']} windows from {wf['n_samples']} samples")
+                        print(f"    ({wf['n_windows_per_sample']} top windows per sample)")
+                        
+                        # Show key feature statistics
+                        feature_stats = wf['feature_stats']
+                        print(f"\n  Signal Statistics (across all high-relevance windows):")
+                        
+                        for feature_name in ['avg_amplitude', 'max_amplitude', 'rms', 
+                                            'peak_freq', 'kurtosis', 'skewness']:
+                            if feature_name in feature_stats:
+                                stats = feature_stats[feature_name]
+                                print(f"    {feature_name}: {stats['mean']:.4f} ± {stats['std']:.4f} "
+                                     f"(range: [{stats['min']:.4f}, {stats['max']:.4f}])")
                 
                 print()
         
@@ -441,6 +667,13 @@ if __name__ == "__main__":
     features = torch.cat([features_class0, features_class1])
     labels = torch.cat([torch.zeros(50), torch.ones(50)]).long()
     
+    # Synthetic heatmaps and signals
+    n_samples = 100
+    n_channels = 3
+    n_timesteps = 2000
+    heatmaps = torch.randn(n_samples, n_channels, n_timesteps)
+    signals = torch.randn(n_samples, n_channels, n_timesteps)
+    
     # Fit GMMs
     gmms = {}
     for class_id in [0, 1]:
@@ -457,16 +690,14 @@ if __name__ == "__main__":
         gmm.fit(class_features)
         gmms[class_id] = gmm
     
-    # Create synthetic global windows
-    global_windows = {
-        0: [(400, 440, 0.85), (1200, 1240, 0.72), (800, 840, 0.65)],
-        1: [(800, 840, 0.91), (1600, 1640, 0.78), (400, 440, 0.60)]
-    }
-    
-    # Test interpreter
+    # Test interpreter with new per-sample extraction API
     interpreter = ConceptInterpreter(gmms, features, labels, layer_name="conv3")
     interpretations = interpreter.interpret_prototypes(
-        global_windows=global_windows,
+        heatmaps=heatmaps,
+        signals=signals,
+        window_size=40,
+        n_top_windows=10,
+        sample_rate=400,
         top_k_filters=10
     )
     
