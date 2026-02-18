@@ -15,7 +15,8 @@ TODO: Full implementation of descriptor extraction and clustering.
 
 import torch
 import numpy as np
-from scipy import signal, stats
+from scipy import stats
+from scipy.signal import find_peaks, welch
 from typing import List, Tuple, Optional, Dict
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
@@ -88,7 +89,7 @@ class TemporalDescriptorTCD:
         signal_norm = signal / (signal.max() + 1e-10)
         
         # Find peaks
-        peaks, properties = signal.find_peaks(
+        peaks, properties = find_peaks(
             signal_norm,
             height=threshold,
             distance=10  # Minimum distance between peaks
@@ -212,7 +213,7 @@ class TemporalDescriptorTCD:
         peak_height = segment.max()
         
         # Find peaks
-        peaks, properties = signal.find_peaks(
+        peaks, properties = find_peaks(
             segment,
             prominence=segment.std() * 0.5
         )
@@ -339,7 +340,7 @@ class TemporalDescriptorTCD:
             return np.zeros(4)
         
         # Compute FFT
-        freqs, psd = signal.welch(
+        freqs, psd = welch(
             segment,
             fs=sample_rate,
             nperseg=min(len(segment), 256)
