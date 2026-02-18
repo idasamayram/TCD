@@ -569,6 +569,267 @@ def plot_prototype_comparison(
     return fig
 
 
+def plot_attribution_graph(
+    prototype_mean: np.ndarray,
+    class_id: int,
+    top_k: int = 10,
+    filter_labels: Optional[List[str]] = None,
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    figsize: Tuple[int, int] = (12, 8)
+) -> plt.Figure:
+    """
+    Visualize concept-to-output attribution flow as a graph.
+    
+    Shows the top-k filters (concepts) from a prototype center μ as nodes on the left,
+    connected to the output class node on the right. Edge width is proportional to
+    filter importance |μ_k|, and edge color indicates sign (positive=green, negative=red).
+    
+    This visualizes which concepts contribute to a specific prototype/class prediction.
+    
+    Args:
+        prototype_mean: Prototype center μ of shape (n_filters,)
+        class_id: Output class ID
+        top_k: Number of top filters to show
+        filter_labels: Optional custom labels for filters
+        class_names: Class ID to name mapping
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    n_filters = len(prototype_mean)
+    
+    # Get top-k filters by absolute magnitude
+    top_indices = np.argsort(np.abs(prototype_mean))[-top_k:][::-1]
+    top_values = prototype_mean[top_indices]
+    
+    # Normalize edge widths to [1, 10]
+    abs_values = np.abs(top_values)
+    max_abs = abs_values.max()
+    edge_widths = 1 + 9 * (abs_values / max_abs)
+    
+    # Layout: filters on left, class on right
+    filter_x = 0.2
+    class_x = 0.8
+    
+    filter_y_positions = np.linspace(0.1, 0.9, top_k)
+    class_y = 0.5
+    
+    # Draw edges first (so they appear behind nodes)
+    for i, (filter_idx, value, width) in enumerate(zip(top_indices, top_values, edge_widths)):
+        filter_y = filter_y_positions[i]
+        
+        # Edge color: green for positive, red for negative
+        edge_color = 'green' if value > 0 else 'red'
+        edge_alpha = 0.6
+        
+        # Draw edge
+        ax.plot([filter_x, class_x], [filter_y, class_y],
+               color=edge_color, linewidth=width, alpha=edge_alpha, zorder=1)
+        
+        # Add edge label showing weight
+        mid_x = (filter_x + class_x) / 2
+        mid_y = (filter_y + class_y) / 2
+        ax.text(mid_x, mid_y, f'{value:+.3f}',
+               fontsize=8, ha='center', va='bottom',
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='none'))
+    
+    # Draw filter nodes
+    for i, filter_idx in enumerate(top_indices):
+        filter_y = filter_y_positions[i]
+        value = top_values[i]
+        
+        # Node circle
+        circle = plt.Circle((filter_x, filter_y), 0.03, 
+                           color='steelblue', zorder=2)
+        ax.add_patch(circle)
+        
+        # Node label
+        if filter_labels and filter_idx < len(filter_labels):
+            label = filter_labels[filter_idx]
+        else:
+            label = f'Filter {filter_idx}'
+        
+        ax.text(filter_x - 0.05, filter_y, 
+               f'{label}\n|μ|={np.abs(value):.3f}',
+               fontsize=9, ha='right', va='center')
+    
+    # Draw class node
+    circle = plt.Circle((class_x, class_y), 0.05, 
+                       color='orange', zorder=2)
+    ax.add_patch(circle)
+    
+    class_name = class_names.get(class_id, f'Class {class_id}')
+    ax.text(class_x + 0.05, class_y, class_name,
+           fontsize=12, ha='left', va='center', fontweight='bold')
+    
+    # Set axis limits and remove axes
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis('off')
+    
+    # Title
+    ax.set_title(f'Prototype → {class_name} Attribution Graph\n'
+                f'(Top-{top_k} Concepts)', fontsize=14, fontweight='bold')
+    
+    # Legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='green', linewidth=3, label='Positive contribution'),
+        Line2D([0], [0], color='red', linewidth=3, label='Negative contribution')
+    ]
+    ax.legend(handles=legend_elements, loc='lower center', 
+             bbox_to_anchor=(0.5, -0.05), ncol=2)
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_robustness_summary(
+    results: Dict[str, Any],
+    figsize: Tuple[int, int] = (14, 6)
+) -> plt.Figure:
+    """
+    Create bar chart summary of robustness scores across perturbation types.
+    
+    Visualizes cosine similarity (robustness) for:
+    - Gaussian noise at different levels
+    - Time shifts at different amounts
+    - Channel dropout per axis
+    
+    Args:
+        results: Output from run_robustness_analysis()
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig = plt.figure(figsize=figsize)
+    
+    # Determine number of subplots needed
+    n_plots = sum([
+        'noise' in results,
+        'shift' in results,
+        'channel_dropout' in results
+    ])
+    
+    if n_plots == 0:
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, 'No robustness results to display',
+               ha='center', va='center', fontsize=14)
+        ax.axis('off')
+        return fig
+    
+    plot_idx = 1
+    
+    # 1. Noise robustness
+    if 'noise' in results:
+        ax = fig.add_subplot(1, n_plots, plot_idx)
+        plot_idx += 1
+        
+        noise_results = results['noise']
+        noise_levels = noise_results['noise_levels']
+        cosine_sims = noise_results['mean_cosine_similarity']
+        std_sims = noise_results['std_cosine_similarity']
+        
+        x_pos = np.arange(len(noise_levels))
+        bars = ax.bar(x_pos, cosine_sims, yerr=std_sims, 
+                     alpha=0.7, capsize=5, color='steelblue')
+        
+        # Color bars by quality: green (>0.9), yellow (0.8-0.9), red (<0.8)
+        for bar, sim in zip(bars, cosine_sims):
+            if sim > 0.9:
+                bar.set_color('green')
+            elif sim > 0.8:
+                bar.set_color('orange')
+            else:
+                bar.set_color('red')
+        
+        ax.set_xlabel('Noise Level (fraction of signal std)')
+        ax.set_ylabel('Cosine Similarity')
+        ax.set_title('Noise Robustness')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([f'{level:.2f}' for level in noise_levels])
+        ax.set_ylim([0, 1.05])
+        ax.axhline(y=0.9, color='green', linestyle='--', alpha=0.5, label='Excellent (>0.9)')
+        ax.axhline(y=0.8, color='orange', linestyle='--', alpha=0.5, label='Good (>0.8)')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.legend(fontsize=8)
+    
+    # 2. Shift robustness
+    if 'shift' in results:
+        ax = fig.add_subplot(1, n_plots, plot_idx)
+        plot_idx += 1
+        
+        shift_results = results['shift']
+        shift_amounts = shift_results['shift_amounts']
+        cosine_sims = [shift_results['mean_cosine_similarity'][s] for s in shift_amounts]
+        std_sims = [shift_results['std_cosine_similarity'][s] for s in shift_amounts]
+        
+        x_pos = np.arange(len(shift_amounts))
+        bars = ax.bar(x_pos, cosine_sims, yerr=std_sims, 
+                     alpha=0.7, capsize=5, color='steelblue')
+        
+        # Color bars by quality
+        for bar, sim in zip(bars, cosine_sims):
+            if sim > 0.9:
+                bar.set_color('green')
+            elif sim > 0.8:
+                bar.set_color('orange')
+            else:
+                bar.set_color('red')
+        
+        ax.set_xlabel('Shift Amount (timesteps)')
+        ax.set_ylabel('Cosine Similarity')
+        ax.set_title('Time-Shift Robustness')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([f'{s:+d}' for s in shift_amounts], rotation=45)
+        ax.set_ylim([0, 1.05])
+        ax.axhline(y=0.9, color='green', linestyle='--', alpha=0.5)
+        ax.axhline(y=0.8, color='orange', linestyle='--', alpha=0.5)
+        ax.grid(True, alpha=0.3, axis='y')
+    
+    # 3. Channel dropout robustness
+    if 'channel_dropout' in results:
+        ax = fig.add_subplot(1, n_plots, plot_idx)
+        
+        dropout_results = results['channel_dropout']
+        channels = dropout_results['channels']
+        cosine_sims = dropout_results['mean_cosine_similarity']
+        std_sims = dropout_results['std_cosine_similarity']
+        
+        x_pos = np.arange(len(channels))
+        bars = ax.bar(x_pos, cosine_sims, yerr=std_sims, 
+                     alpha=0.7, capsize=5, color='steelblue')
+        
+        # Color bars: lower similarity = more critical channel (red)
+        # Higher similarity = less critical channel (green)
+        min_sim = min(cosine_sims)
+        max_sim = max(cosine_sims)
+        sim_range = max_sim - min_sim
+        
+        for bar, sim in zip(bars, cosine_sims):
+            # Normalize to [0, 1] where 0=most critical, 1=least critical
+            normalized = (sim - min_sim) / (sim_range + 1e-6)
+            # Red for critical, green for non-critical
+            color = plt.cm.RdYlGn(normalized)
+            bar.set_color(color)
+        
+        ax.set_xlabel('Dropped Channel')
+        ax.set_ylabel('Cosine Similarity')
+        ax.set_title('Channel Dropout Robustness\n(Lower = More Critical)')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(channels)
+        ax.set_ylim([0, 1.05])
+        ax.grid(True, alpha=0.3, axis='y')
+    
+    fig.suptitle('Robustness Analysis Summary', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    return fig
+
+
 def generate_concept_heatmaps(
     model,
     dataset,
