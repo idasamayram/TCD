@@ -7,7 +7,7 @@ to test their causal role in model predictions.
 
 import torch
 import torch.nn as nn
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Dict
 import numpy as np
 
 
