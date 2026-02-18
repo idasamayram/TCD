@@ -21,10 +21,14 @@ from typing import Dict, List, Tuple, Optional, Any
 from sklearn.mixture import GaussianMixture
 import scipy.stats as stats
 from scipy import signal as scipy_signal
+import warnings
 
 
 # Class name mapping (can be customized per dataset)
 DEFAULT_CLASS_NAMES = {0: "OK", 1: "NOK"}
+
+# Constants for feature extraction
+EPSILON_SPECTRAL = 1e-10  # Small epsilon to prevent division by zero in spectral features
 
 
 def get_class_name(class_id: int, class_names: Optional[Dict[int, str]] = None) -> str:
@@ -151,8 +155,9 @@ def extract_sample_features(
                 peak_freq_idx = np.argmax(psd)
                 peak_freq = freqs[peak_freq_idx]
                 spectral_energy = np.sum(psd)
-                spectral_centroid = np.sum(freqs * psd) / (np.sum(psd) + 1e-10)
-            except:
+                spectral_centroid = np.sum(freqs * psd) / (np.sum(psd) + EPSILON_SPECTRAL)
+            except (ValueError, ZeroDivisionError) as e:
+                # Welch computation can fail on certain signal properties
                 peak_freq = 0.0
                 spectral_energy = 0.0
                 spectral_centroid = 0.0
@@ -268,6 +273,15 @@ class ConceptInterpreter:
                 }
             }
         """
+        # Warn if deprecated parameter is used
+        if global_windows is not None:
+            warnings.warn(
+                "The 'global_windows' parameter is deprecated and will be removed in a future version. "
+                "Feature extraction now uses per-sample high-relevance windows instead of global positions.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
         interpretations = {}
         
         for class_id, gmm in self.gmms.items():

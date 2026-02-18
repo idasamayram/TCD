@@ -29,7 +29,7 @@ def noise_robustness(
     n_samples: int = 100,
     noise_levels: List[float] = [0.01, 0.05, 0.1, 0.2],
     prototype_discovery: Optional[TemporalPrototypeDiscovery] = None,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Test robustness to Gaussian noise at multiple SNR levels.
@@ -65,6 +65,9 @@ def noise_robustness(
     print("GAUSSIAN NOISE ROBUSTNESS ANALYSIS")
     print("="*80)
     print(f"Testing {n_samples} samples at noise levels: {noise_levels}")
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model.to(device)
     model.eval()
@@ -169,7 +172,7 @@ def shift_robustness(
     n_samples: int = 100,
     shift_amounts: List[int] = [10, 25, 50],
     prototype_discovery: Optional[TemporalPrototypeDiscovery] = None,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Test robustness to circular time-shift.
@@ -201,6 +204,9 @@ def shift_robustness(
     print("TIME-SHIFT ROBUSTNESS ANALYSIS")
     print("="*80)
     print(f"Testing {n_samples} samples at shift amounts: ±{shift_amounts} timesteps")
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model.to(device)
     model.eval()
@@ -308,7 +314,7 @@ def channel_dropout_robustness(
     attributor: TimeSeriesCondAttribution,
     n_samples: int = 100,
     prototype_discovery: Optional[TemporalPrototypeDiscovery] = None,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Test robustness to channel dropout.
@@ -342,6 +348,9 @@ def channel_dropout_robustness(
     print("CHANNEL DROPOUT ROBUSTNESS ANALYSIS")
     print("="*80)
     print(f"Testing {n_samples} samples by zeroing out each axis (X/Y/Z)")
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model.to(device)
     model.eval()
@@ -454,7 +463,7 @@ def run_robustness_analysis(
     noise_levels: List[float] = [0.01, 0.05, 0.1, 0.2],
     shift_amounts: List[int] = [10, 25, 50],
     test_channel_dropout: bool = True,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Run comprehensive robustness analysis.
@@ -490,6 +499,9 @@ def run_robustness_analysis(
     print("="*80)
     print(f"Layer: {layer_name}")
     print(f"Samples: {n_samples}")
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}")
     
     results = {}
