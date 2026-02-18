@@ -85,6 +85,250 @@ class ConceptInterventionHook:
         return modified_output
 
 
+class PrototypeInterventionHook:
+    """
+    Hook for intervening on multiple concept channels simultaneously (prototype-level).
+    
+    Tests whether a complete prototype pattern (top-k filters) is causally necessary.
+    Unlike single-filter intervention, this suppresses the entire characteristic
+    pattern of a prototype.
+    
+    Usage:
+        # Get top-k filters from prototype center μ
+        top_filters = np.argsort(np.abs(prototype_mean))[-k:]
+        
+        hook = PrototypeInterventionHook(filter_indices=top_filters, method='suppress')
+        handle = model.conv3.register_forward_hook(hook)
+        output = model(x)  # Entire prototype pattern is suppressed
+        handle.remove()
+    """
+    
+    def __init__(
+        self,
+        filter_indices: List[int],
+        method: str = 'suppress',
+        factor: float = 0.0
+    ):
+        """
+        Initialize prototype intervention hook.
+        
+        Args:
+            filter_indices: List of filter indices to intervene on simultaneously
+            method: Intervention method - 'suppress', 'amplify', or 'ablate'
+            factor: Scaling factor (0.0=full suppression, 2.0=double amplification)
+        """
+        self.filter_indices = filter_indices
+        self.method = method
+        self.factor = factor
+        
+        if method == 'suppress':
+            self.factor = 0.0
+        elif method == 'ablate':
+            self.factor = 0.0
+        elif method == 'amplify' and factor == 0.0:
+            self.factor = 2.0
+    
+    def __call__(
+        self,
+        module: nn.Module,
+        input: tuple,
+        output: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Hook function called during forward pass.
+        
+        Args:
+            module: Layer being hooked
+            input: Input to the layer (tuple)
+            output: Output from the layer (tensor)
+            
+        Returns:
+            Modified output tensor
+        """
+        if len(self.filter_indices) == 0:
+            return output
+        
+        # Clone output to avoid in-place modification
+        modified_output = output.clone()
+        
+        # Intervene on all specified channels simultaneously
+        for idx in self.filter_indices:
+            if idx < output.shape[1]:  # Check channel exists
+                if self.method in ['suppress', 'ablate']:
+                    modified_output[:, idx, :] = self.factor
+                elif self.method == 'amplify':
+                    modified_output[:, idx, :] *= self.factor
+        
+        return modified_output
+
+
+def prototype_intervention_analysis(
+    model: nn.Module,
+    data: torch.Tensor,
+    labels: torch.Tensor,
+    prototype_discovery,  # TemporalPrototypeDiscovery instance
+    features: torch.Tensor,
+    layer_name: str,
+    top_k: int = 5,
+    method: str = 'suppress'
+) -> Dict[int, List[Dict]]:
+    """
+    Perform prototype-level intervention analysis.
+    
+    For each GMM prototype, suppress the top-k filters characterizing it
+    simultaneously and measure prediction change on samples assigned to
+    that prototype.
+    
+    Args:
+        model: PyTorch model
+        data: Input data of shape (N, C, T)
+        labels: True labels of shape (N,)
+        prototype_discovery: TemporalPrototypeDiscovery instance with fitted GMMs
+        features: Concept relevance vectors of shape (N, n_concepts)
+        layer_name: Layer to intervene on
+        top_k: Number of top filters to suppress per prototype
+        method: Intervention method ('suppress', 'amplify')
+        
+    Returns:
+        Dictionary mapping class_id -> list of prototype intervention results
+        Each result contains: {
+            'prototype_idx': int,
+            'top_filters': list of filter indices,
+            'n_samples': number of samples assigned to prototype,
+            'mean_prob_change': average prediction probability change,
+            'flip_rate': fraction of samples that changed prediction
+        }
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    
+    results = {}
+    
+    # Get unique classes
+    unique_classes = torch.unique(labels).cpu().numpy()
+    
+    for class_id in unique_classes:
+        if class_id not in prototype_discovery.gmms:
+            continue
+        
+        print(f"\n{'='*60}")
+        print(f"Class {class_id} Prototype Intervention Analysis")
+        print(f"{'='*60}")
+        
+        gmm = prototype_discovery.gmms[class_id]
+        class_mask = labels == class_id
+        class_data = data[class_mask]
+        class_features = features[class_mask]
+        
+        # Assign samples to prototypes
+        prototype_assignments = prototype_discovery.assign_prototype(class_features, class_id)
+        
+        class_results = []
+        
+        for proto_idx in range(prototype_discovery.n_prototypes):
+            # Get prototype center μ
+            prototype_mean = gmm.means_[proto_idx]  # shape: (n_concepts,)
+            
+            # Find top-k filters by absolute magnitude
+            top_filter_indices = np.argsort(np.abs(prototype_mean))[-top_k:][::-1]
+            
+            # Get samples assigned to this prototype
+            proto_mask = prototype_assignments == proto_idx
+            proto_data = class_data[proto_mask]
+            
+            if len(proto_data) == 0:
+                print(f"  Prototype {proto_idx}: No samples assigned, skipping")
+                continue
+            
+            proto_data = proto_data.to(device)
+            
+            # Original prediction
+            with torch.no_grad():
+                original_output = model(proto_data)
+                original_probs = torch.softmax(original_output, dim=1)
+                original_class_probs = original_probs[:, class_id]
+            
+            # Apply prototype intervention
+            hook = PrototypeInterventionHook(
+                filter_indices=top_filter_indices.tolist(),
+                method=method
+            )
+            
+            # Find target layer
+            target_module = None
+            for name, module in model.named_modules():
+                if name == layer_name:
+                    target_module = module
+                    break
+            
+            if target_module is None:
+                raise ValueError(f"Layer {layer_name} not found in model")
+            
+            # Register hook and get intervened prediction
+            handle = target_module.register_forward_hook(hook)
+            
+            with torch.no_grad():
+                intervened_output = model(proto_data)
+                intervened_probs = torch.softmax(intervened_output, dim=1)
+                intervened_class_probs = intervened_probs[:, class_id]
+            
+            handle.remove()
+            
+            # Compute metrics
+            prob_change = (intervened_class_probs - original_class_probs).cpu().numpy()
+            mean_prob_change = prob_change.mean()
+            
+            prediction_flip = (original_output.argmax(1) != intervened_output.argmax(1)).float()
+            flip_rate = prediction_flip.mean().item()
+            
+            result = {
+                'prototype_idx': proto_idx,
+                'top_filters': top_filter_indices.tolist(),
+                'top_filter_values': prototype_mean[top_filter_indices].tolist(),
+                'n_samples': len(proto_data),
+                'mean_prob_change': mean_prob_change,
+                'flip_rate': flip_rate,
+                'std_prob_change': prob_change.std()
+            }
+            
+            class_results.append(result)
+            
+            # Print results
+            print(f"  Prototype {proto_idx}:")
+            print(f"    Top-{top_k} filters: {top_filter_indices.tolist()}")
+            print(f"    Filter magnitudes: {np.abs(prototype_mean[top_filter_indices])}")
+            print(f"    Samples assigned: {len(proto_data)}")
+            print(f"    Mean probability change: {mean_prob_change:.4f}")
+            print(f"    Prediction flip rate: {flip_rate:.2%}")
+        
+        results[int(class_id)] = class_results
+    
+    return results
+
+
+def compute_deviation(
+    features: torch.Tensor,
+    prototype_mean: np.ndarray
+) -> torch.Tensor:
+    """
+    Compute deviation Δ(ν) = ν - μ for each sample from prototype center.
+    
+    Shows how each sample differs from the prototype in concept space.
+    Positive values = filter is stronger than prototype average.
+    Negative values = filter is weaker than prototype average.
+    
+    Args:
+        features: Concept relevance vectors of shape (N, n_concepts)
+        prototype_mean: Prototype center μ of shape (n_concepts,)
+        
+    Returns:
+        Deviations of shape (N, n_concepts)
+    """
+    mean_tensor = torch.from_numpy(prototype_mean).float()
+    deviations = features - mean_tensor[None, :]
+    return deviations
+
+
 def compute_intervention_effect(
     model: nn.Module,
     data: torch.Tensor,
