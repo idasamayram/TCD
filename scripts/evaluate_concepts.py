@@ -284,8 +284,65 @@ def evaluate_variant_c(
     # Overall importance (averaged across both classes)
     importance_scores = (importance_scores_class_0 + importance_scores_class_1) / 2
     
+    # Add prototype-level intervention if enabled
+    proto_results = None
+    if config.get('evaluation', {}).get('prototype_intervention', True):
+        print("\n" + "="*60)
+        print("PROTOTYPE-LEVEL MULTI-FILTER INTERVENTION")
+        print("="*60)
+        
+        from tcd.intervention import prototype_intervention_analysis
+        
+        # Prepare data for intervention
+        # We need full dataset to run interventions
+        loader = DataLoader(dataset, batch_size=config['analysis']['batch_size'], shuffle=False)
+        
+        all_data = []
+        all_labels = []
+        for batch_data, batch_labels in loader:
+            all_data.append(batch_data)
+            all_labels.append(batch_labels)
+        
+        data_tensor = torch.cat(all_data).to(device)
+        labels_tensor = torch.cat(all_labels).to(device)
+        
+        top_k = config.get('evaluation', {}).get('prototype_top_k', 5)
+        
+        print(f"\nRunning prototype intervention with top-{top_k} filters per prototype...")
+        
+        proto_results = prototype_intervention_analysis(
+            model=model,
+            data=data_tensor,
+            labels=labels_tensor,
+            prototype_discovery=tcd.prototype_discovery,
+            features=features.to(device),
+            layer_name=layer_name,
+            top_k=top_k,
+            method='suppress'
+        )
+        
+        # Print formatted results
+        print("\n" + "="*60)
+        print("PROTOTYPE INTERVENTION RESULTS")
+        print("="*60)
+        
+        for class_id, class_results in proto_results.items():
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"\nClass {class_id} ({class_name}):")
+            
+            for result in class_results:
+                proto_idx = result['prototype_idx']
+                top_filters = result['top_filters']
+                mean_prob_change = result['mean_prob_change']
+                flip_rate = result['flip_rate']
+                
+                print(f"  Prototype {proto_idx}:")
+                print(f"    Top-{top_k} filters: {top_filters}")
+                print(f"    Mean probability change: {mean_prob_change:.4f}")
+                print(f"    Prediction flip rate: {flip_rate:.2%}")
+    
     # Compute evaluation metrics
-    print("\nComputing evaluation metrics...")
+    print("\n" + "="*60)
     
     from tcd.evaluation import compute_faithfulness, compute_stability, compute_concept_purity, compute_prototype_coverage
     
@@ -370,7 +427,8 @@ def evaluate_variant_c(
         'importance_scores_class_0': importance_scores_class_0,
         'importance_scores_class_1': importance_scores_class_1,
         'metrics_class_0': metrics_class_0,
-        'metrics_class_1': metrics_class_1
+        'metrics_class_1': metrics_class_1,
+        'prototype_intervention': proto_results
     }
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:
