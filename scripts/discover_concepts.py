@@ -24,6 +24,7 @@ import h5py
 import numpy as np
 import pickle
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 # from models.cnn1d_model import CNN1D_Wide
 from tcd.variants.filterbank import FilterBankTCD, WindowConceptTCD
@@ -296,44 +297,78 @@ def run_variant_c(
     print("="*80)
     
     # Check if we should auto-select n_prototypes
-    auto_select = config['tcd'].get('auto_select_n_prototypes', False)
+    use_bic = config['tcd'].get('use_bic_selection', False)
     
-    if auto_select:
+    if use_bic:
         print("\nAuto-selecting optimal n_prototypes using BIC...")
         from tcd.prototypes import TemporalPrototypeDiscovery
         
-        # Select for each class separately
-        optimal_n_dict = {}
+        # Get BIC range from config
+        bic_range = config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6])
+        min_n = min(bic_range)
+        max_n = max(bic_range)
+        
+        # Validate BIC range against sample sizes
         for class_id in [0, 1]:
             class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
-            class_features = features[class_mask]
+            n_class_samples = class_mask.sum().item()
+            max_reasonable = n_class_samples // 10
             
-            if class_features.shape[0] < 2:
-                optimal_n_dict[class_id] = 2
+            if max_n > max_reasonable:
+                print(f"  Warning: BIC max ({max_n}) may be too large for class {class_id} "
+                      f"with {n_class_samples} samples. Recommended max: {max_reasonable}")
+        
+        # Create temporary proto_discovery instance for BIC selection
+        proto_discovery = TemporalPrototypeDiscovery(
+            n_prototypes=1,  # temporary value
+            covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
+            n_init=config['tcd'].get('gmm_n_init', 5),
+            max_iter=config['tcd'].get('gmm_max_iter', 200),
+            balance_method=config['tcd'].get('balance_method', 'downsample')
+        )
+        
+        # Build features_dict for select_optimal_n_prototypes
+        features_dict = {}
+        for class_id in [0, 1]:
+            class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
+            features_dict[class_id] = features[class_mask]
+        
+        # Select optimal n using BIC
+        print(f"\nTesting range: {bic_range}")
+        optimal_n_dict = {}
+        
+        for class_id in [0, 1]:
+            class_features = features_dict[class_id]
+            class_name = "OK" if class_id == 0 else "NOK"
+            
+            if class_features.shape[0] < min_n:
+                print(f"\nClass {class_id} ({class_name}): Only {class_features.shape[0]} samples, using n={min_n}")
+                optimal_n_dict[class_id] = min_n
                 continue
             
-            min_n = config['tcd'].get('min_prototypes', 2)
-            max_n = min(config['tcd'].get('max_prototypes', 10), class_features.shape[0] // 10)
-            
-            print(f"\nClass {class_id} ({class_features.shape[0]} samples):")
+            print(f"\nClass {class_id} ({class_name}) with {class_features.shape[0]} samples:")
             optimal_n, scores = TemporalPrototypeDiscovery.select_optimal_n_prototypes(
                 class_features,
                 min_prototypes=min_n,
-                max_prototypes=max_n,
+                max_prototypes=min(max_n, class_features.shape[0] // 10),
                 covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
                 n_init=config['tcd'].get('gmm_n_init', 5),
-                max_iter=config['tcd'].get('gmm_max_iter', 200)
+                max_iter=config['tcd'].get('gmm_max_iter', 200),
+                criterion='bic'
             )
             optimal_n_dict[class_id] = optimal_n
+            
+            # Print BIC scores for transparency
+            print(f"  BIC scores: {scores}")
+            print(f"  Selected: n_prototypes={optimal_n}")
         
-        # Use the average (rounded) for simplicity
-        # Note: This ensures same n_prototypes for both classes for consistency.
-        # Alternative approach: use per-class optimal values directly in GMM fitting
-        # by modifying LearnedClusterTCD to support different n_prototypes per class.
+        # Use the average (rounded) for simplicity across both classes
         n_prototypes = int(np.mean(list(optimal_n_dict.values())))
-        print(f"\nUsing n_prototypes={n_prototypes} (averaged across classes)")
-        print(f"  Per-class optimal values: {optimal_n_dict}")
-        print(f"  Note: Using average to maintain consistency across classes")
+        print(f"\n{'='*60}")
+        print(f"BIC-optimal prototypes: {n_prototypes} (averaged across classes)")
+        print(f"  Per-class optimal: OK={optimal_n_dict.get(0, 'N/A')}, NOK={optimal_n_dict.get(1, 'N/A')}")
+        print(f"  If BIC says 1 per class, that's valid - means one strategy per class")
+        print(f"{'='*60}")
     else:
         n_prototypes = config['tcd']['n_prototypes']
         print(f"\nUsing configured n_prototypes={n_prototypes}")
@@ -357,14 +392,18 @@ def run_variant_c(
     
     # Step 3: Global window analysis
     print("\n" + "="*80)
-    print("Step 3: Global Window Analysis")
+    print("Step 3: Window Analysis")
     print("="*80)
     
     global_windows = None
+    window_analysis_results = None
+    
     if heatmaps is not None:
         from tcd.variants.global_concepts import GlobalWindowAnalysis
         
         gw_config = config['tcd'].get('global_windows', {})
+        iw_config = config['tcd'].get('important_windows', {})
+        
         analyzer = GlobalWindowAnalysis(
             window_size=gw_config.get('window_size', 40),
             n_top_positions=gw_config.get('n_top_positions', 10),
@@ -372,20 +411,62 @@ def run_variant_c(
             per_class=gw_config.get('per_class', True)
         )
         
-        print(f"\nFinding globally important window positions...")
-        print(f"  Window size: {gw_config.get('window_size', 40)} timesteps")
-        print(f"  Top positions: {gw_config.get('n_top_positions', 10)}")
+        # Choose method based on config
+        analysis_method = iw_config.get('method', 'global')
         
-        global_windows = analyzer.find_important_windows(heatmaps, labels)
-        
-        # Compute coverage
-        coverage = analyzer.get_window_coverage_per_sample(heatmaps, labels)
-        print(f"\nWindow coverage statistics:")
-        for class_id, cov in coverage.items():
-            class_name = "OK" if class_id == 0 else "NOK"
-            print(f"  Class {class_id} ({class_name}): mean={cov.mean():.2%}, std={cov.std():.2%}")
+        if analysis_method == 'per_sample':
+            print(f"\nUsing CNC-style per-sample window extraction...")
+            print(f"  Window size: {iw_config.get('window_size', 40)} timesteps")
+            print(f"  Top windows per sample: {iw_config.get('n_top_windows', 10)}")
+            
+            # Note: We don't have raw signals here, will extract from heatmaps
+            window_analysis_results = analyzer.extract_important_windows_per_sample(
+                heatmaps=heatmaps,
+                signals=None,  # Could load from dataset if needed
+                labels=labels,
+                n_top_windows=iw_config.get('n_top_windows', 10),
+                sample_rate=config['data']['sample_rate']
+            )
+            
+            # Print per-class statistics
+            print("\n" + "="*60)
+            print("PER-CLASS WINDOW FEATURE STATISTICS")
+            print("="*60)
+            
+            for class_id, stats in window_analysis_results['per_class_stats'].items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"\nClass {class_id} ({class_name}):")
+                
+                for feat_name, feat_stats in list(stats.items())[:5]:  # Show first 5 features
+                    print(f"  {feat_name}: mean={feat_stats['mean']:.4f}, std={feat_stats['std']:.4f}")
+            
+            # Print statistical test results
+            if window_analysis_results['statistical_tests']:
+                print("\n" + "="*60)
+                print("STATISTICAL TESTS (OK vs NOK)")
+                print("="*60)
+                print(f"{'Feature':<25} {'p-value':<12} {'Cohen\'s d':<12} {'Significant':<12}")
+                print("-"*60)
+                
+                for feat_name, test in window_analysis_results['statistical_tests'].items():
+                    sig_str = "Yes" if test['significant'] else "No"
+                    print(f"{feat_name:<25} {test['p_value']:<12.6f} {test['cohens_d']:<12.3f} {sig_str:<12}")
+        else:
+            # Use original global averaging method
+            print(f"\nUsing global averaging method...")
+            print(f"  Window size: {gw_config.get('window_size', 40)} timesteps")
+            print(f"  Top positions: {gw_config.get('n_top_positions', 10)}")
+            
+            global_windows = analyzer.find_important_windows(heatmaps, labels)
+            
+            # Compute coverage
+            coverage = analyzer.get_window_coverage_per_sample(heatmaps, labels)
+            print(f"\nWindow coverage statistics:")
+            for class_id, cov in coverage.items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"  Class {class_id} ({class_name}): mean={cov.mean():.2%}, std={cov.std():.2%}")
     else:
-        print("\nWarning: Heatmaps not found, skipping global window analysis")
+        print("\nWarning: Heatmaps not found, skipping window analysis")
     
     # Step 4: Interpret prototypes
     print("\n" + "="*80)
@@ -435,6 +516,56 @@ def run_variant_c(
         assignments = tcd.assign_prototype(class_features, class_id)
         print(f"  Assignment distribution: {np.bincount(assignments)}")
     
+    # Step 7: Generate Visualizations
+    print("\n" + "="*80)
+    print("Step 7: Generate Visualizations")
+    print("="*80)
+    
+    # Import visualization functions
+    from tcd.visualization import plot_prototype_gallery, plot_prototype_comparison
+    
+    # For visualizations, we need signals. For now we'll use heatmaps as proxy
+    # In a full implementation, we'd load actual signals from dataset
+    
+    # Generate prototype comparison (OK vs NOK)
+    print("\nGenerating prototype comparison plot...")
+    try:
+        ok_prototypes = []
+        nok_prototypes = []
+        
+        for class_id in [0, 1]:
+            if class_id in tcd.prototype_discovery.gmms:
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                for proto_idx in range(tcd.n_prototypes):
+                    prototype_mean = gmm.means_[proto_idx]
+                    if class_id == 0:
+                        ok_prototypes.append(prototype_mean)
+                    else:
+                        nok_prototypes.append(prototype_mean)
+        
+        if ok_prototypes and nok_prototypes:
+            fig = plot_prototype_comparison(
+                ok_prototypes=ok_prototypes,
+                nok_prototypes=nok_prototypes,
+                filter_names=[f"F{i}" for i in range(features.shape[1])],
+                top_k=10
+            )
+            comparison_path = os.path.join(output_path, 'prototype_comparison.png')
+            fig.savefig(comparison_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved prototype comparison to {comparison_path}")
+        else:
+            print("  Warning: Could not generate prototype comparison (missing prototypes)")
+    except Exception as e:
+        print(f"  Warning: Could not generate prototype comparison: {e}")
+    
+    # Generate prototype galleries for each class
+    # Note: This requires loading actual signals/heatmaps for closest samples
+    # For now we'll skip the full gallery but leave the structure
+    print("\nPrototype gallery generation:")
+    print("  Note: Full gallery generation requires loading sample signals")
+    print("  This would be added in a complete implementation")
+    
     # Save results
     print("\n" + "="*80)
     print("Step 6: Save Results")
@@ -459,6 +590,12 @@ def run_variant_c(
             pickle.dump(global_windows, f)
         print(f"  Saved global window analysis")
     
+    # Save window analysis results if available
+    if window_analysis_results:
+        with open(os.path.join(output_path, 'window_analysis.pkl'), 'wb') as f:
+            pickle.dump(window_analysis_results, f)
+        print(f"  Saved per-sample window analysis")
+    
     # Save main results
     results = {
         'variant': 'C',
@@ -468,6 +605,7 @@ def run_variant_c(
         'labels': labels.numpy(),
         'outputs': outputs.numpy(),
         'global_windows': global_windows,
+        'window_analysis': window_analysis_results,
         'interpretations': interpretation_export
     }
     
@@ -485,7 +623,7 @@ def run_variant_b(
     config: dict
 ):
     """
-    Run Variant B: Temporal descriptor concepts (SKELETON).
+    Run Variant B: Temporal descriptor concepts.
     
     Args:
         features_path: Path to CRP features directory
@@ -493,21 +631,132 @@ def run_variant_b(
         config: Configuration dict
     """
     print("\n" + "="*60)
-    print("VARIANT B: Temporal Descriptor Concepts (SKELETON)")
+    print("VARIANT B: Temporal Descriptor Concepts")
     print("="*60)
     
-    print("\nVariant B is not fully implemented yet.")
-    print("See tcd/variants/temporal_descriptors.py for TODO items.")
-    print("\nKey steps to implement:")
-    print("  1. Extract temporal descriptors (slope, peak, autocorr, spectral)")
-    print("  2. Cluster descriptors with k-means or GMM")
-    print("  3. Assign segments to concepts")
+    # Load heatmaps
+    print("\nLoading heatmaps...")
+    heatmaps_list = []
+    labels_list = []
     
-    # Create placeholder output
+    for class_id in [0, 1]:
+        heatmaps_path = os.path.join(features_path, f"heatmaps_class_{class_id}.hdf5")
+        if not os.path.exists(heatmaps_path):
+            print(f"Warning: Heatmaps not found at {heatmaps_path}")
+            continue
+        
+        with h5py.File(heatmaps_path, 'r') as f:
+            heatmaps = np.array(f['heatmaps'])
+            heatmaps_list.append(heatmaps)
+            labels_list.extend([class_id] * len(heatmaps))
+            print(f"  Class {class_id}: {heatmaps.shape}")
+    
+    if not heatmaps_list:
+        print("Error: No heatmaps found. Run run_analysis.py first.")
+        return
+    
+    heatmaps = torch.from_numpy(np.concatenate(heatmaps_list)).float()
+    labels = torch.tensor(labels_list).long()
+    
+    # Get config for Variant B
+    n_concepts = config['tcd'].get('n_concepts', 5)
+    descriptor_types = config['tcd'].get('descriptor_types', ['slope', 'peak', 'autocorr', 'spectral'])
+    
+    print(f"\nInitializing TemporalDescriptorTCD with {n_concepts} concepts")
+    print(f"  Descriptor types: {descriptor_types}")
+    
+    # Create TemporalDescriptorTCD instance
+    tcd = TemporalDescriptorTCD(
+        n_concepts=n_concepts,
+        descriptor_types=descriptor_types,
+        clustering_method='kmeans'
+    )
+    
+    # Fit: extract segments, compute descriptors, cluster them
+    print("\nFitting temporal descriptor clustering...")
+    tcd.fit(heatmaps)
+    
+    # Extract concepts: assign segments to clusters
+    print("\nExtracting concept assignments...")
+    concept_assignments = tcd.extract_concepts(heatmaps)
+    print(f"Concept assignments shape: {concept_assignments.shape}")
+    
+    # Print discovered temporal concepts
+    print("\n" + "="*60)
+    print("DISCOVERED TEMPORAL CONCEPTS")
+    print("="*60)
+    
+    concept_labels = tcd.get_concept_labels()
+    for i, label in enumerate(concept_labels):
+        print(f"  Concept {i}: {label}")
+    
+    # Compute per-class concept importance
+    print("\n" + "="*60)
+    print("PER-CLASS CONCEPT IMPORTANCE")
+    print("="*60)
+    
+    for class_id in [0, 1]:
+        class_mask = labels == class_id
+        class_assignments = concept_assignments[class_mask]
+        
+        # Validate that assignments are integers
+        if not np.issubdtype(class_assignments.dtype, np.integer):
+            print(f"  Warning: Converting non-integer assignments to int for class {class_id}")
+            class_assignments = class_assignments.astype(np.int64)
+        
+        # Count concept occurrences
+        # Use int() conversion for safety even after validation
+        concept_counts = np.bincount(class_assignments.flatten().astype(int), 
+                                     minlength=n_concepts)
+        total_segments = concept_counts.sum()
+        
+        class_name = "OK" if class_id == 0 else "NOK"
+        print(f"\nClass {class_id} ({class_name}):")
+        for i in range(n_concepts):
+            pct = 100.0 * concept_counts[i] / (total_segments + 1e-10)
+            print(f"  Concept {i}: {concept_counts[i]} segments ({pct:.1f}%)")
+    
+    # Print cluster statistics if available
+    if hasattr(tcd, 'cluster_centers_'):
+        print("\n" + "="*60)
+        print("CLUSTER CENTER STATISTICS")
+        print("="*60)
+        
+        centers = tcd.cluster_centers_
+        print(f"Cluster centers shape: {centers.shape}")
+        
+        for i in range(n_concepts):
+            center = centers[i]
+            print(f"\nConcept {i}:")
+            print(f"  Mean: {center.mean():.4f}")
+            print(f"  Std: {center.std():.4f}")
+            print(f"  Min: {center.min():.4f}")
+            print(f"  Max: {center.max():.4f}")
+    
+    # Save results
     os.makedirs(output_path, exist_ok=True)
-    with open(os.path.join(output_path, 'README.txt'), 'w') as f:
-        f.write("Variant B is not yet implemented.\n")
-        f.write("See tcd/variants/temporal_descriptors.py for skeleton.\n")
+    
+    results = {
+        'variant': 'B',
+        'n_concepts': n_concepts,
+        'descriptor_types': descriptor_types,
+        'concept_labels': concept_labels,
+        'concept_assignments': concept_assignments.numpy(),
+        'labels': labels.numpy()
+    }
+    
+    if hasattr(tcd, 'cluster_centers_'):
+        results['cluster_centers'] = tcd.cluster_centers_
+    
+    with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
+        pickle.dump(results, f)
+    
+    # Save TCD model
+    with open(os.path.join(output_path, 'tcd_model.pkl'), 'wb') as f:
+        pickle.dump(tcd, f)
+    
+    print(f"\n✓ Results saved to {output_path}")
+    print("="*60 + "\n")
 
 
 def run_variant_d(

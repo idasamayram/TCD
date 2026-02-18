@@ -20,7 +20,9 @@ import yaml
 import torch
 import pickle
 import numpy as np
+import traceback
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 from models.cnn1d_model import CNN1D_Wide, VibrationDataset
 from tcd.intervention import measure_concept_importance, compute_intervention_effect
@@ -284,8 +286,65 @@ def evaluate_variant_c(
     # Overall importance (averaged across both classes)
     importance_scores = (importance_scores_class_0 + importance_scores_class_1) / 2
     
+    # Add prototype-level intervention if enabled
+    proto_results = None
+    if config.get('evaluation', {}).get('prototype_intervention', True):
+        print("\n" + "="*60)
+        print("PROTOTYPE-LEVEL MULTI-FILTER INTERVENTION")
+        print("="*60)
+        
+        from tcd.intervention import prototype_intervention_analysis
+        
+        # Prepare data for intervention
+        # We need full dataset to run interventions
+        loader = DataLoader(dataset, batch_size=config['analysis']['batch_size'], shuffle=False)
+        
+        all_data = []
+        all_labels = []
+        for batch_data, batch_labels in loader:
+            all_data.append(batch_data)
+            all_labels.append(batch_labels)
+        
+        data_tensor = torch.cat(all_data).to(device)
+        labels_tensor = torch.cat(all_labels).to(device)
+        
+        top_k = config.get('evaluation', {}).get('prototype_top_k', 5)
+        
+        print(f"\nRunning prototype intervention with top-{top_k} filters per prototype...")
+        
+        proto_results = prototype_intervention_analysis(
+            model=model,
+            data=data_tensor,
+            labels=labels_tensor,
+            prototype_discovery=tcd.prototype_discovery,
+            features=features.to(device),
+            layer_name=layer_name,
+            top_k=top_k,
+            method='suppress'
+        )
+        
+        # Print formatted results
+        print("\n" + "="*60)
+        print("PROTOTYPE INTERVENTION RESULTS")
+        print("="*60)
+        
+        for class_id, class_results in proto_results.items():
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"\nClass {class_id} ({class_name}):")
+            
+            for result in class_results:
+                proto_idx = result['prototype_idx']
+                top_filters = result['top_filters']
+                mean_prob_change = result['mean_prob_change']
+                flip_rate = result['flip_rate']
+                
+                print(f"  Prototype {proto_idx}:")
+                print(f"    Top-{top_k} filters: {top_filters}")
+                print(f"    Mean probability change: {mean_prob_change:.4f}")
+                print(f"    Prediction flip rate: {flip_rate:.2%}")
+    
     # Compute evaluation metrics
-    print("\nComputing evaluation metrics...")
+    print("\n" + "="*60)
     
     from tcd.evaluation import compute_faithfulness, compute_stability, compute_concept_purity, compute_prototype_coverage
     
@@ -360,6 +419,123 @@ def evaluate_variant_c(
     # Use the print_evaluation_report function with per-class metrics
     print_evaluation_report(metrics, per_class_metrics={'class_0': metrics_class_0, 'class_1': metrics_class_1})
     
+    # Generate visualizations
+    print("\n" + "="*60)
+    print("GENERATING VISUALIZATIONS")
+    print("="*60)
+    
+    # Concept conditional heatmaps if enabled
+    if config.get('evaluation', {}).get('concept_heatmaps', True):
+        from tcd.visualization import generate_concept_heatmaps
+        from tcd.composites import CNCValidatedComposite
+        
+        print("\nGenerating concept conditional heatmaps...")
+        
+        # Create composite for CRP
+        composite = CNCValidatedComposite()
+        
+        concept_heatmap_top_k = config.get('evaluation', {}).get('concept_heatmap_top_k', 5)
+        
+        try:
+            concept_heatmap_figs = generate_concept_heatmaps(
+                model=model,
+                dataset=dataset,
+                prototype_discovery=tcd.prototype_discovery,
+                layer_name=layer_name,
+                composite=composite,
+                output_dir=os.path.join(output_path, 'concept_heatmaps'),
+                top_k=concept_heatmap_top_k,
+                device=device
+            )
+            print(f"  Generated {len(concept_heatmap_figs)} concept heatmap figures")
+        except Exception as e:
+            print(f"  Warning: Could not generate concept heatmaps: {e}")
+    
+    # Robustness deviation analysis if enabled
+    if config.get('evaluation', {}).get('robustness_analysis', True):
+        from tcd.robustness import robustness_deviation_analysis
+        from tcd.visualization import plot_deviation_matrix
+        
+        print("\nPerforming robustness deviation analysis...")
+        
+        deviation_threshold = config.get('evaluation', {}).get('deviation_threshold', 2.0)
+        
+        try:
+            robustness_results = robustness_deviation_analysis(
+                features=features,
+                labels=labels,
+                prototype_discovery=tcd.prototype_discovery,
+                deviation_threshold=deviation_threshold
+            )
+            
+            # Print summary
+            print("\nRobustness Summary:")
+            for class_id, stats in robustness_results['class_statistics'].items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"  {class_name} (Class {class_id}): {stats['pct_flagged']:.1f}% samples flagged as unusual")
+            
+            # Generate deviation matrix visualization
+            print("\nGenerating deviation matrix visualizations...")
+            
+            for class_id in [0, 1]:
+                if class_id not in robustness_results['class_statistics']:
+                    continue
+                
+                class_mask = labels == class_id
+                class_features = features[class_mask]
+                class_deviations_all = robustness_results['per_sample_deviations'][class_mask.cpu().numpy()]
+                class_assignments = robustness_results['per_sample_assignments'][class_mask.cpu().numpy()]
+                
+                # For visualization, show deviations for top 50 samples (or fewer if not available)
+                n_samples_to_show = min(50, len(class_features))
+                
+                # Compute deviations per concept for visualization
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                
+                # Get samples sorted by deviation magnitude
+                sorted_indices = np.argsort(class_deviations_all)[-n_samples_to_show:][::-1]
+                
+                deviations_matrix = []
+                for idx in sorted_indices:
+                    sample_features = class_features[idx]
+                    proto_idx = class_assignments[idx]
+                    prototype_mean = gmm.means_[proto_idx]
+                    deviation = sample_features.cpu().numpy() - prototype_mean
+                    deviations_matrix.append(deviation)
+                
+                deviations_matrix = np.array(deviations_matrix)
+                
+                # Plot deviation matrix
+                concept_labels = [f"F{i}" for i in range(features.shape[1])]
+                sample_labels = [f"S{i}" for i in sorted_indices]
+                
+                class_name = "OK" if class_id == 0 else "NOK"
+                fig = plot_deviation_matrix(
+                    deviations=deviations_matrix,
+                    concept_labels=concept_labels,
+                    sample_labels=sample_labels,
+                    title=f'Deviation Matrix - {class_name} (Top {n_samples_to_show} by deviation magnitude)'
+                )
+                
+                deviation_path = os.path.join(output_path, f'deviation_matrix_class_{class_id}.png')
+                fig.savefig(deviation_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved deviation matrix to {deviation_path}")
+            
+            # Add robustness results to evaluation
+            evaluation['robustness'] = robustness_results
+            
+        except Exception as e:
+            print(f"  Warning: Could not perform robustness analysis: {e}")
+            traceback.print_exc()
+    
+    # Note: plot_prototype_samples requires loading actual signals from samples
+    # For a complete implementation, we would load the closest samples to each prototype
+    # and generate visualizations. For now we note this requirement.
+    print("\nPrototype sample visualization:")
+    print("  Note: Requires loading sample signals for closest prototypes")
+    print("  This would be added in a complete implementation with dataset access")
+    
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
     evaluation = {
@@ -370,7 +546,8 @@ def evaluate_variant_c(
         'importance_scores_class_0': importance_scores_class_0,
         'importance_scores_class_1': importance_scores_class_1,
         'metrics_class_0': metrics_class_0,
-        'metrics_class_1': metrics_class_1
+        'metrics_class_1': metrics_class_1,
+        'prototype_intervention': proto_results
     }
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:
