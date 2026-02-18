@@ -24,6 +24,7 @@ import h5py
 import numpy as np
 import pickle
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 # from models.cnn1d_model import CNN1D_Wide
 from tcd.variants.filterbank import FilterBankTCD, WindowConceptTCD
@@ -504,6 +505,56 @@ def run_variant_c(
         class_features = features[class_mask]
         assignments = tcd.assign_prototype(class_features, class_id)
         print(f"  Assignment distribution: {np.bincount(assignments)}")
+    
+    # Step 7: Generate Visualizations
+    print("\n" + "="*80)
+    print("Step 7: Generate Visualizations")
+    print("="*80)
+    
+    # Import visualization functions
+    from tcd.visualization import plot_prototype_gallery, plot_prototype_comparison
+    
+    # For visualizations, we need signals. For now we'll use heatmaps as proxy
+    # In a full implementation, we'd load actual signals from dataset
+    
+    # Generate prototype comparison (OK vs NOK)
+    print("\nGenerating prototype comparison plot...")
+    try:
+        ok_prototypes = []
+        nok_prototypes = []
+        
+        for class_id in [0, 1]:
+            if class_id in tcd.prototype_discovery.gmms:
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                for proto_idx in range(tcd.n_prototypes):
+                    prototype_mean = gmm.means_[proto_idx]
+                    if class_id == 0:
+                        ok_prototypes.append(prototype_mean)
+                    else:
+                        nok_prototypes.append(prototype_mean)
+        
+        if ok_prototypes and nok_prototypes:
+            fig = plot_prototype_comparison(
+                ok_prototypes=ok_prototypes,
+                nok_prototypes=nok_prototypes,
+                filter_names=[f"F{i}" for i in range(features.shape[1])],
+                top_k=10
+            )
+            comparison_path = os.path.join(output_path, 'prototype_comparison.png')
+            fig.savefig(comparison_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            print(f"  Saved prototype comparison to {comparison_path}")
+        else:
+            print("  Warning: Could not generate prototype comparison (missing prototypes)")
+    except Exception as e:
+        print(f"  Warning: Could not generate prototype comparison: {e}")
+    
+    # Generate prototype galleries for each class
+    # Note: This requires loading actual signals/heatmaps for closest samples
+    # For now we'll skip the full gallery but leave the structure
+    print("\nPrototype gallery generation:")
+    print("  Note: Full gallery generation requires loading sample signals")
+    print("  This would be added in a complete implementation")
     
     # Save results
     print("\n" + "="*80)

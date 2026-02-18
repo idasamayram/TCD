@@ -21,6 +21,7 @@ import torch
 import pickle
 import numpy as np
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 from models.cnn1d_model import CNN1D_Wide, VibrationDataset
 from tcd.intervention import measure_concept_importance, compute_intervention_effect
@@ -416,6 +417,18 @@ def evaluate_variant_c(
     
     # Use the print_evaluation_report function with per-class metrics
     print_evaluation_report(metrics, per_class_metrics={'class_0': metrics_class_0, 'class_1': metrics_class_1})
+    
+    # Generate visualizations
+    print("\n" + "="*60)
+    print("GENERATING VISUALIZATIONS")
+    print("="*60)
+    
+    # Note: plot_prototype_samples requires loading actual signals from samples
+    # For a complete implementation, we would load the closest samples to each prototype
+    # and generate visualizations. For now we note this requirement.
+    print("\nPrototype sample visualization:")
+    print("  Note: Requires loading sample signals for closest prototypes")
+    print("  This would be added in a complete implementation with dataset access")
     
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)
