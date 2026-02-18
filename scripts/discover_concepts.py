@@ -381,14 +381,18 @@ def run_variant_c(
     
     # Step 3: Global window analysis
     print("\n" + "="*80)
-    print("Step 3: Global Window Analysis")
+    print("Step 3: Window Analysis")
     print("="*80)
     
     global_windows = None
+    window_analysis_results = None
+    
     if heatmaps is not None:
         from tcd.variants.global_concepts import GlobalWindowAnalysis
         
         gw_config = config['tcd'].get('global_windows', {})
+        iw_config = config['tcd'].get('important_windows', {})
+        
         analyzer = GlobalWindowAnalysis(
             window_size=gw_config.get('window_size', 40),
             n_top_positions=gw_config.get('n_top_positions', 10),
@@ -396,20 +400,62 @@ def run_variant_c(
             per_class=gw_config.get('per_class', True)
         )
         
-        print(f"\nFinding globally important window positions...")
-        print(f"  Window size: {gw_config.get('window_size', 40)} timesteps")
-        print(f"  Top positions: {gw_config.get('n_top_positions', 10)}")
+        # Choose method based on config
+        analysis_method = iw_config.get('method', 'global')
         
-        global_windows = analyzer.find_important_windows(heatmaps, labels)
-        
-        # Compute coverage
-        coverage = analyzer.get_window_coverage_per_sample(heatmaps, labels)
-        print(f"\nWindow coverage statistics:")
-        for class_id, cov in coverage.items():
-            class_name = "OK" if class_id == 0 else "NOK"
-            print(f"  Class {class_id} ({class_name}): mean={cov.mean():.2%}, std={cov.std():.2%}")
+        if analysis_method == 'per_sample':
+            print(f"\nUsing CNC-style per-sample window extraction...")
+            print(f"  Window size: {iw_config.get('window_size', 40)} timesteps")
+            print(f"  Top windows per sample: {iw_config.get('n_top_windows', 10)}")
+            
+            # Note: We don't have raw signals here, will extract from heatmaps
+            window_analysis_results = analyzer.extract_important_windows_per_sample(
+                heatmaps=heatmaps,
+                signals=None,  # Could load from dataset if needed
+                labels=labels,
+                n_top_windows=iw_config.get('n_top_windows', 10),
+                sample_rate=config['data']['sample_rate']
+            )
+            
+            # Print per-class statistics
+            print("\n" + "="*60)
+            print("PER-CLASS WINDOW FEATURE STATISTICS")
+            print("="*60)
+            
+            for class_id, stats in window_analysis_results['per_class_stats'].items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"\nClass {class_id} ({class_name}):")
+                
+                for feat_name, feat_stats in list(stats.items())[:5]:  # Show first 5 features
+                    print(f"  {feat_name}: mean={feat_stats['mean']:.4f}, std={feat_stats['std']:.4f}")
+            
+            # Print statistical test results
+            if window_analysis_results['statistical_tests']:
+                print("\n" + "="*60)
+                print("STATISTICAL TESTS (OK vs NOK)")
+                print("="*60)
+                print(f"{'Feature':<25} {'p-value':<12} {'Cohen\'s d':<12} {'Significant':<12}")
+                print("-"*60)
+                
+                for feat_name, test in window_analysis_results['statistical_tests'].items():
+                    sig_str = "Yes" if test['significant'] else "No"
+                    print(f"{feat_name:<25} {test['p_value']:<12.6f} {test['cohens_d']:<12.3f} {sig_str:<12}")
+        else:
+            # Use original global averaging method
+            print(f"\nUsing global averaging method...")
+            print(f"  Window size: {gw_config.get('window_size', 40)} timesteps")
+            print(f"  Top positions: {gw_config.get('n_top_positions', 10)}")
+            
+            global_windows = analyzer.find_important_windows(heatmaps, labels)
+            
+            # Compute coverage
+            coverage = analyzer.get_window_coverage_per_sample(heatmaps, labels)
+            print(f"\nWindow coverage statistics:")
+            for class_id, cov in coverage.items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"  Class {class_id} ({class_name}): mean={cov.mean():.2%}, std={cov.std():.2%}")
     else:
-        print("\nWarning: Heatmaps not found, skipping global window analysis")
+        print("\nWarning: Heatmaps not found, skipping window analysis")
     
     # Step 4: Interpret prototypes
     print("\n" + "="*80)
@@ -483,6 +529,12 @@ def run_variant_c(
             pickle.dump(global_windows, f)
         print(f"  Saved global window analysis")
     
+    # Save window analysis results if available
+    if window_analysis_results:
+        with open(os.path.join(output_path, 'window_analysis.pkl'), 'wb') as f:
+            pickle.dump(window_analysis_results, f)
+        print(f"  Saved per-sample window analysis")
+    
     # Save main results
     results = {
         'variant': 'C',
@@ -492,6 +544,7 @@ def run_variant_c(
         'labels': labels.numpy(),
         'outputs': outputs.numpy(),
         'global_windows': global_windows,
+        'window_analysis': window_analysis_results,
         'interpretations': interpretation_export
     }
     

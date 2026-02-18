@@ -353,6 +353,323 @@ class GlobalWindowAnalysis:
             results[class_id] = coverage
         
         return results
+    
+    def extract_important_windows_per_sample(
+        self,
+        heatmaps: torch.Tensor,
+        signals: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        n_top_windows: int = 10,
+        sample_rate: int = 400
+    ) -> Dict:
+        """
+        CNC-style per-sample important window extraction.
+        
+        Unlike the global averaging approach, this:
+        1. For each sample, finds top-K most important windows
+        2. Extracts per-window features from RAW signal
+        3. Aggregates across samples per class
+        4. Performs statistical tests between classes
+        
+        This is the proven approach from idasamayram/CNC evaluation/time_faithfulness.py
+        
+        Args:
+            heatmaps: Heatmap relevances of shape (N, C, T)
+            signals: Optional raw signals of shape (N, C, T)
+            labels: Optional class labels of shape (N,)
+            n_top_windows: Number of top windows to extract per sample
+            sample_rate: Sampling rate in Hz
+            
+        Returns:
+            Dictionary with:
+                - 'windows': List of dicts with per-window features
+                - 'per_class_stats': Aggregate statistics per class
+                - 'statistical_tests': T-test results between classes
+        """
+        if heatmaps.dim() != 3:
+            raise ValueError(f"Expected heatmaps of shape (N, C, T), got {heatmaps.shape}")
+        
+        n_samples, n_channels, n_timesteps = heatmaps.shape
+        n_windows_per_timestep = n_timesteps // self.window_size
+        
+        if labels is None:
+            labels = torch.zeros(n_samples, dtype=torch.long)
+        
+        # Collect all windows across all samples
+        all_windows = []
+        
+        print(f"\nExtracting top-{n_top_windows} windows per sample...")
+        print(f"  Window size: {self.window_size} timesteps ({self.window_size/sample_rate:.3f}s at {sample_rate}Hz)")
+        print(f"  Total windows per sample: {n_windows_per_timestep}")
+        
+        for sample_idx in range(n_samples):
+            sample_heatmap = heatmaps[sample_idx]  # (C, T)
+            sample_signal = signals[sample_idx] if signals is not None else None
+            sample_label = labels[sample_idx].item()
+            
+            # Divide into non-overlapping windows
+            window_relevances = []
+            window_positions = []
+            
+            for win_idx in range(n_windows_per_timestep):
+                start_pos = win_idx * self.window_size
+                end_pos = min(start_pos + self.window_size, n_timesteps)
+                
+                # Compute window relevance (mean absolute relevance across channels and timesteps)
+                window_heat = sample_heatmap[:, start_pos:end_pos]
+                window_rel = torch.abs(window_heat).mean().item()
+                
+                window_relevances.append(window_rel)
+                window_positions.append((start_pos, end_pos))
+            
+            # Get top-K windows by relevance
+            window_relevances = np.array(window_relevances)
+            top_k = min(n_top_windows, len(window_relevances))
+            top_indices = np.argsort(window_relevances)[-top_k:][::-1]
+            
+            # Extract features for each top window
+            for rank, win_idx in enumerate(top_indices):
+                start_pos, end_pos = window_positions[win_idx]
+                window_rel = window_relevances[win_idx]
+                
+                # Extract window from heatmap
+                window_heat = sample_heatmap[:, start_pos:end_pos]
+                
+                # Extract features from signal if available
+                if sample_signal is not None:
+                    window_sig = sample_signal[:, start_pos:end_pos]
+                    features = self._extract_window_features_from_signal(
+                        window_sig, sample_rate
+                    )
+                else:
+                    # Extract from heatmap as fallback
+                    features = self._extract_window_features_from_heatmap(window_heat)
+                
+                # Add metadata
+                window_info = {
+                    'sample_idx': sample_idx,
+                    'class_id': sample_label,
+                    'window_idx': win_idx,
+                    'rank': rank,
+                    'start': start_pos,
+                    'end': end_pos,
+                    'position': start_pos / n_timesteps,  # Normalized position [0, 1]
+                    'relevance': window_rel,
+                    **features
+                }
+                
+                all_windows.append(window_info)
+        
+        # Aggregate per-class statistics
+        per_class_stats = self._compute_per_class_statistics(all_windows, labels)
+        
+        # Perform statistical tests between classes
+        statistical_tests = self._perform_statistical_tests(all_windows, labels)
+        
+        print(f"\nExtracted {len(all_windows)} windows total")
+        for class_id in torch.unique(labels):
+            n_class_windows = sum(1 for w in all_windows if w['class_id'] == class_id.item())
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"  Class {class_id} ({class_name}): {n_class_windows} windows")
+        
+        return {
+            'windows': all_windows,
+            'per_class_stats': per_class_stats,
+            'statistical_tests': statistical_tests
+        }
+    
+    def _extract_window_features_from_signal(
+        self,
+        window_signal: torch.Tensor,
+        sample_rate: int = 400
+    ) -> Dict[str, float]:
+        """
+        Extract vibration features from a signal window.
+        
+        Features match CNC thesis evaluation/time_faithfulness.py
+        
+        Args:
+            window_signal: Signal window of shape (C, T)
+            sample_rate: Sampling rate
+            
+        Returns:
+            Dictionary of features
+        """
+        import scipy.stats as stats
+        from scipy import signal as scipy_signal
+        
+        # Convert to numpy
+        sig = window_signal.cpu().numpy()
+        
+        # Average across channels for simplicity (or could extract per-channel)
+        sig_avg = sig.mean(axis=0)
+        
+        # Time-domain features
+        avg_amplitude = np.abs(sig_avg).mean()
+        max_amplitude = np.abs(sig_avg).max()
+        std_amplitude = sig_avg.std()
+        rms = np.sqrt(np.mean(sig_avg**2))
+        
+        # Statistical features
+        skewness = float(stats.skew(sig_avg))
+        kurtosis = float(stats.kurtosis(sig_avg))
+        
+        # Frequency-domain features
+        if len(sig_avg) >= 4:
+            freqs, psd = scipy_signal.welch(sig_avg, fs=sample_rate, nperseg=min(len(sig_avg), 256))
+            peak_freq_idx = np.argmax(psd)
+            peak_freq = freqs[peak_freq_idx]
+            spectral_energy = np.sum(psd)
+            
+            # Spectral centroid
+            spectral_centroid = np.sum(freqs * psd) / (np.sum(psd) + 1e-10)
+        else:
+            peak_freq = 0.0
+            spectral_energy = 0.0
+            spectral_centroid = 0.0
+        
+        # Zero-crossing rate
+        zero_crossings = np.sum(np.diff(np.sign(sig_avg)) != 0)
+        zero_crossing_rate = zero_crossings / len(sig_avg)
+        
+        return {
+            'avg_amplitude': float(avg_amplitude),
+            'max_amplitude': float(max_amplitude),
+            'std_amplitude': float(std_amplitude),
+            'rms': float(rms),
+            'skewness': float(skewness),
+            'kurtosis': float(kurtosis),
+            'peak_freq': float(peak_freq),
+            'spectral_energy': float(spectral_energy),
+            'spectral_centroid': float(spectral_centroid),
+            'zero_crossing_rate': float(zero_crossing_rate)
+        }
+    
+    def _extract_window_features_from_heatmap(
+        self,
+        window_heatmap: torch.Tensor
+    ) -> Dict[str, float]:
+        """
+        Extract basic features from heatmap window (fallback when no signal available).
+        
+        Args:
+            window_heatmap: Heatmap window of shape (C, T)
+            
+        Returns:
+            Dictionary of features
+        """
+        heat = window_heatmap.cpu().numpy()
+        heat_avg = np.abs(heat).mean(axis=0)
+        
+        return {
+            'avg_amplitude': float(heat_avg.mean()),
+            'max_amplitude': float(heat_avg.max()),
+            'std_amplitude': float(heat_avg.std()),
+            'rms': float(np.sqrt(np.mean(heat_avg**2))),
+            'skewness': 0.0,  # Not meaningful for heatmap
+            'kurtosis': 0.0,
+            'peak_freq': 0.0,
+            'spectral_energy': 0.0,
+            'spectral_centroid': 0.0,
+            'zero_crossing_rate': 0.0
+        }
+    
+    def _compute_per_class_statistics(
+        self,
+        all_windows: List[Dict],
+        labels: torch.Tensor
+    ) -> Dict[int, Dict]:
+        """
+        Compute aggregate statistics per class.
+        
+        Similar to CNC thesis Table 5.2
+        """
+        unique_classes = torch.unique(labels).cpu().numpy()
+        per_class_stats = {}
+        
+        for class_id in unique_classes:
+            class_windows = [w for w in all_windows if w['class_id'] == class_id]
+            
+            if len(class_windows) == 0:
+                continue
+            
+            # Extract feature arrays
+            feature_names = ['avg_amplitude', 'max_amplitude', 'std_amplitude', 'rms',
+                           'skewness', 'kurtosis', 'peak_freq', 'spectral_energy',
+                           'spectral_centroid', 'zero_crossing_rate', 'relevance']
+            
+            stats_dict = {}
+            for feat in feature_names:
+                if feat in class_windows[0]:
+                    values = np.array([w[feat] for w in class_windows])
+                    stats_dict[feat] = {
+                        'mean': float(np.mean(values)),
+                        'std': float(np.std(values)),
+                        'min': float(np.min(values)),
+                        'max': float(np.max(values)),
+                        'median': float(np.median(values))
+                    }
+            
+            per_class_stats[int(class_id)] = stats_dict
+        
+        return per_class_stats
+    
+    def _perform_statistical_tests(
+        self,
+        all_windows: List[Dict],
+        labels: torch.Tensor
+    ) -> Dict[str, Dict]:
+        """
+        Perform t-tests between classes for each feature.
+        
+        Returns p-values and effect sizes.
+        """
+        from scipy import stats
+        
+        unique_classes = torch.unique(labels).cpu().numpy()
+        
+        if len(unique_classes) < 2:
+            return {}
+        
+        # Get windows for each class
+        class_0_windows = [w for w in all_windows if w['class_id'] == unique_classes[0]]
+        class_1_windows = [w for w in all_windows if w['class_id'] == unique_classes[1]]
+        
+        if len(class_0_windows) == 0 or len(class_1_windows) == 0:
+            return {}
+        
+        # Test each feature
+        feature_names = ['avg_amplitude', 'max_amplitude', 'std_amplitude', 'rms',
+                        'skewness', 'kurtosis', 'peak_freq', 'spectral_energy',
+                        'spectral_centroid', 'zero_crossing_rate', 'relevance']
+        
+        test_results = {}
+        for feat in feature_names:
+            if feat not in class_0_windows[0]:
+                continue
+            
+            values_0 = np.array([w[feat] for w in class_0_windows])
+            values_1 = np.array([w[feat] for w in class_1_windows])
+            
+            # Two-sample t-test
+            t_stat, p_value = stats.ttest_ind(values_0, values_1)
+            
+            # Cohen's d effect size
+            pooled_std = np.sqrt(((len(values_0) - 1) * values_0.std()**2 + 
+                                  (len(values_1) - 1) * values_1.std()**2) / 
+                                 (len(values_0) + len(values_1) - 2))
+            cohens_d = (values_0.mean() - values_1.mean()) / (pooled_std + 1e-10)
+            
+            test_results[feat] = {
+                't_statistic': float(t_stat),
+                'p_value': float(p_value),
+                'cohens_d': float(cohens_d),
+                'significant': p_value < 0.05,
+                'class_0_mean': float(values_0.mean()),
+                'class_1_mean': float(values_1.mean())
+            }
+        
+        return test_results
 
 
 if __name__ == "__main__":
