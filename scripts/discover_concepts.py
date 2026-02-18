@@ -296,44 +296,68 @@ def run_variant_c(
     print("="*80)
     
     # Check if we should auto-select n_prototypes
-    auto_select = config['tcd'].get('auto_select_n_prototypes', False)
+    use_bic = config['tcd'].get('use_bic_selection', False)
     
-    if auto_select:
+    if use_bic:
         print("\nAuto-selecting optimal n_prototypes using BIC...")
         from tcd.prototypes import TemporalPrototypeDiscovery
         
-        # Select for each class separately
-        optimal_n_dict = {}
+        # Get BIC range from config
+        bic_range = config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6])
+        min_n = min(bic_range)
+        max_n = max(bic_range)
+        
+        # Create temporary proto_discovery instance for BIC selection
+        proto_discovery = TemporalPrototypeDiscovery(
+            n_prototypes=1,  # temporary value
+            covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
+            n_init=config['tcd'].get('gmm_n_init', 5),
+            max_iter=config['tcd'].get('gmm_max_iter', 200),
+            balance_method=config['tcd'].get('balance_method', 'downsample')
+        )
+        
+        # Build features_dict for select_optimal_n_prototypes
+        features_dict = {}
         for class_id in [0, 1]:
             class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
-            class_features = features[class_mask]
+            features_dict[class_id] = features[class_mask]
+        
+        # Select optimal n using BIC
+        print(f"\nTesting range: {bic_range}")
+        optimal_n_dict = {}
+        
+        for class_id in [0, 1]:
+            class_features = features_dict[class_id]
+            class_name = "OK" if class_id == 0 else "NOK"
             
-            if class_features.shape[0] < 2:
-                optimal_n_dict[class_id] = 2
+            if class_features.shape[0] < min_n:
+                print(f"\nClass {class_id} ({class_name}): Only {class_features.shape[0]} samples, using n={min_n}")
+                optimal_n_dict[class_id] = min_n
                 continue
             
-            min_n = config['tcd'].get('min_prototypes', 2)
-            max_n = min(config['tcd'].get('max_prototypes', 10), class_features.shape[0] // 10)
-            
-            print(f"\nClass {class_id} ({class_features.shape[0]} samples):")
+            print(f"\nClass {class_id} ({class_name}) with {class_features.shape[0]} samples:")
             optimal_n, scores = TemporalPrototypeDiscovery.select_optimal_n_prototypes(
                 class_features,
                 min_prototypes=min_n,
-                max_prototypes=max_n,
+                max_prototypes=min(max_n, class_features.shape[0] // 10),
                 covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
                 n_init=config['tcd'].get('gmm_n_init', 5),
-                max_iter=config['tcd'].get('gmm_max_iter', 200)
+                max_iter=config['tcd'].get('gmm_max_iter', 200),
+                criterion='bic'
             )
             optimal_n_dict[class_id] = optimal_n
+            
+            # Print BIC scores for transparency
+            print(f"  BIC scores: {scores}")
+            print(f"  Selected: n_prototypes={optimal_n}")
         
-        # Use the average (rounded) for simplicity
-        # Note: This ensures same n_prototypes for both classes for consistency.
-        # Alternative approach: use per-class optimal values directly in GMM fitting
-        # by modifying LearnedClusterTCD to support different n_prototypes per class.
+        # Use the average (rounded) for simplicity across both classes
         n_prototypes = int(np.mean(list(optimal_n_dict.values())))
-        print(f"\nUsing n_prototypes={n_prototypes} (averaged across classes)")
-        print(f"  Per-class optimal values: {optimal_n_dict}")
-        print(f"  Note: Using average to maintain consistency across classes")
+        print(f"\n{'='*60}")
+        print(f"BIC-optimal prototypes: {n_prototypes} (averaged across classes)")
+        print(f"  Per-class optimal: OK={optimal_n_dict.get(0, 'N/A')}, NOK={optimal_n_dict.get(1, 'N/A')}")
+        print(f"  If BIC says 1 per class, that's valid - means one strategy per class")
+        print(f"{'='*60}")
     else:
         n_prototypes = config['tcd']['n_prototypes']
         print(f"\nUsing configured n_prototypes={n_prototypes}")

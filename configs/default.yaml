@@ -26,10 +26,9 @@ tcd:
   n_concepts: 6  # Number of concepts for window-based discovery (Variant A)
   
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
-  n_prototypes: 4  # Number of prototypes per class (or use auto_select_n_prototypes)
-  auto_select_n_prototypes: false  # If true, use BIC to select optimal n_prototypes
-  min_prototypes: 1  # Min for auto-selection (BIC may select 1 = single strategy per class)
-  max_prototypes: 6  # Max for auto-selection
+  n_prototypes: 4  # Number of prototypes per class (or use use_bic_selection)
+  use_bic_selection: false  # If true, use BIC to select optimal n_prototypes
+  bic_range: [1, 2, 3, 4, 5, 6]  # Range to search for optimal n_prototypes
   top_k_samples: 6  # Top-k samples per prototype for visualization
   gmm_covariance: "diag"  # Better for high-dimensional (64+ dims): 'diag', 'full', 'tied', 'spherical'
   gmm_n_init: 5  # Number of GMM initializations (increased from 1 for better convergence)
@@ -43,6 +42,23 @@ tcd:
     threshold_factor: 1.5  # For threshold mode: keep windows with importance > mean + factor*std
     per_class: true  # Find important windows per class
     use_signed_relevance: false  # If true, use mean signed relevance instead of absolute (for signed composites)
+  
+  # Important windows extraction (CNC-style per-sample analysis)
+  important_windows:
+    method: "per_sample"  # "per_sample" (CNC-style) or "global" (old averaging)
+    n_top_windows: 10  # Top windows per sample
+    window_size: 40  # Timesteps per window
+    features:  # Features to extract per window
+      - rms
+      - peak_freq
+      - crest_factor
+      - kurtosis
+      - zero_crossing_rate
+      - spectral_energy
+      - spectral_centroid
+      - skewness
+      - max_amplitude
+      - avg_amplitude
   
   # Interpretation features (applied to globally-important windows)
   interpretation_features:
@@ -98,6 +114,14 @@ intervention:
   method: "suppress"  # suppress, amplify, or ablate
   target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space
   concept_indices: []  # leave empty to auto-select
+
+evaluation:
+  prototype_intervention: true  # Enable multi-filter prototype intervention
+  prototype_top_k: 5  # Number of top filters to suppress per prototype
+  concept_heatmaps: true  # Generate conditional CRP heatmaps
+  concept_heatmap_top_k: 5  # Number of top concepts to visualize
+  robustness_analysis: true  # Enable deviation-based robustness analysis
+  deviation_threshold: 2.0  # Flag samples with ||Δ|| > mean + threshold*std
 
 output:
   results_dir: "results"
