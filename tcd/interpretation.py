@@ -288,8 +288,10 @@ class ConceptInterpreter:
             class_mask = self.labels == class_id
             class_features = self.features[class_mask]  # (N_class, n_filters)
             class_heatmaps = heatmaps[class_mask]  # (N_class, C, T)
-            # class_signals = signals[class_mask] got None type error when signals is None, so added check
-            class_signals = signals[class_mask] if signals is not None else None  # (N_class, C, T)
+            class_signals = signals[class_mask]
+
+            #got None type error when signals is None, so added check
+            # class_signals = signals[class_mask] if signals is not None else None  # (N_class, C, T)
             n_class_samples = class_features.shape[0]
             
             # Assign samples to prototypes
@@ -320,8 +322,9 @@ class ConceptInterpreter:
                 window_features = None
                 if n_proto_samples > 0:
                     proto_heatmaps = class_heatmaps[proto_mask]
-                    # proto_signals = class_signals[proto_mask] got None type error when signals is None, so added check
-                    proto_signals = class_signals[proto_mask] if class_signals is not None else None
+                    proto_signals = class_signals[proto_mask]
+                    #got None type error when signals is None, so added check
+                    #proto_signals = class_signals[proto_mask] if class_signals is not None else None
                     
                     window_features = self._analyze_window_features(
                         proto_heatmaps,
