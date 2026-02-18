@@ -20,6 +20,7 @@ import yaml
 import torch
 import pickle
 import numpy as np
+import traceback
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
@@ -526,7 +527,6 @@ def evaluate_variant_c(
             
         except Exception as e:
             print(f"  Warning: Could not perform robustness analysis: {e}")
-            import traceback
             traceback.print_exc()
     
     # Note: plot_prototype_samples requires loading actual signals from samples

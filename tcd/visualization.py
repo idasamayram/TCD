@@ -590,6 +590,9 @@ def generate_concept_heatmaps(
     
     This shows WHEN in the signal each concept activates.
     
+    Note: Full implementation requires integration with TimeSeriesCondAttribution
+    from tcd.attribution module. See idasamayram/zennit-crp for reference.
+    
     Args:
         model: PyTorch model
         dataset: Dataset to load samples from
@@ -601,9 +604,8 @@ def generate_concept_heatmaps(
         device: Device to run on
         
     Returns:
-        Dictionary mapping (class_id, proto_idx) -> figure
+        Dictionary mapping (class_id, proto_idx) -> figure path
     """
-    from tcd.attribution import TimeSeriesCondAttribution
     import os
     
     print("\n" + "="*60)

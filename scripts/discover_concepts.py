@@ -308,6 +308,16 @@ def run_variant_c(
         min_n = min(bic_range)
         max_n = max(bic_range)
         
+        # Validate BIC range against sample sizes
+        for class_id in [0, 1]:
+            class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
+            n_class_samples = class_mask.sum().item()
+            max_reasonable = n_class_samples // 10
+            
+            if max_n > max_reasonable:
+                print(f"  Warning: BIC max ({max_n}) may be too large for class {class_id} "
+                      f"with {n_class_samples} samples. Recommended max: {max_reasonable}")
+        
         # Create temporary proto_discovery instance for BIC selection
         proto_discovery = TemporalPrototypeDiscovery(
             n_prototypes=1,  # temporary value
@@ -689,7 +699,13 @@ def run_variant_b(
         class_mask = labels == class_id
         class_assignments = concept_assignments[class_mask]
         
+        # Validate that assignments are integers
+        if not np.issubdtype(class_assignments.dtype, np.integer):
+            print(f"  Warning: Converting non-integer assignments to int for class {class_id}")
+            class_assignments = class_assignments.astype(np.int64)
+        
         # Count concept occurrences
+        # Use int() conversion for safety even after validation
         concept_counts = np.bincount(class_assignments.flatten().astype(int), 
                                      minlength=n_concepts)
         total_segments = concept_counts.sum()
