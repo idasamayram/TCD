@@ -344,7 +344,8 @@ def run_variant_c(
         layer_name=layer_name,
         covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
         n_init=config['tcd'].get('gmm_n_init', 5),
-        max_iter=config['tcd'].get('gmm_max_iter', 200)
+        max_iter=config['tcd'].get('gmm_max_iter', 200),
+        balance_method=config['tcd'].get('balance_method', 'downsample')
     )
     
     # Fit GMM prototypes

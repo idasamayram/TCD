@@ -315,6 +315,260 @@ def _plot_heatmap_subplot(
     ax.grid(True, alpha=0.3)
 
 
+def plot_prototype_samples(
+    signals: List[np.ndarray],
+    heatmaps: List[np.ndarray],
+    prototype_idx: int,
+    sample_distances: Optional[List[float]] = None,
+    axes_names: List[str] = ['X', 'Y', 'Z'],
+    title: Optional[str] = None,
+    figsize: Tuple[int, int] = (15, 10),
+    alpha: float = 0.3,
+    cmap: str = 'bwr'
+) -> plt.Figure:
+    """
+    Plot representative samples for a single prototype.
+    
+    For each GMM prototype, displays the N closest real samples (by Euclidean
+    distance to centroid μ in CRP filter space) along with their LRP heatmaps.
+    
+    This answers: "What does prototype X actually look like as a vibration signal?"
+    
+    Args:
+        signals: List of signal arrays, each of shape (C, T)
+        heatmaps: List of heatmap arrays, each of shape (C, T)
+        prototype_idx: Prototype index for labeling
+        sample_distances: Optional distances to prototype center
+        axes_names: Names for each channel
+        title: Optional plot title
+        figsize: Figure size
+        alpha: Transparency of heatmap overlay
+        cmap: Colormap for heatmap
+        
+    Returns:
+        Matplotlib figure
+    """
+    n_samples = len(signals)
+    n_channels = signals[0].shape[0]
+    
+    fig, axes = plt.subplots(n_samples, n_channels, figsize=figsize, sharex=True)
+    if n_samples == 1:
+        axes = axes[None, :]
+    if n_channels == 1:
+        axes = axes[:, None]
+    
+    # Overall title
+    if title is None:
+        title = f'Prototype {prototype_idx}: Representative Samples'
+    fig.suptitle(title, fontsize=14, y=0.995)
+    
+    for i, (signal, heatmap) in enumerate(zip(signals, heatmaps)):
+        for c in range(n_channels):
+            ax = axes[i, c]
+            
+            # Plot signal
+            time = np.arange(signal.shape[1])
+            ax.plot(time, signal[c], 'k-', linewidth=1, alpha=0.7)
+            
+            # Overlay heatmap
+            heatmap_flat = heatmap.flatten()
+            vmax = np.abs(heatmap_flat).max()
+            norm = Normalize(vmin=-vmax, vmax=vmax)
+            heat_colors = plt.cm.get_cmap(cmap)(norm(heatmap[c]))
+            
+            for t in range(len(time) - 1):
+                ax.axvspan(t, t + 1, facecolor=heat_colors[t][:3], alpha=alpha)
+            
+            # Labels
+            if i == 0:
+                ax.set_title(axes_names[c] if c < len(axes_names) else f'Ch{c}')
+            if c == 0:
+                dist_str = f' (d={sample_distances[i]:.3f})' if sample_distances else ''
+                ax.set_ylabel(f'Sample {i+1}{dist_str}', fontsize=10)
+            if i == n_samples - 1:
+                ax.set_xlabel('Time (samples)')
+            
+            ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_prototype_gallery(
+    all_signals: Dict[int, List[np.ndarray]],
+    all_heatmaps: Dict[int, List[np.ndarray]],
+    all_distances: Dict[int, List[float]],
+    class_id: int,
+    axes_names: List[str] = ['X', 'Y', 'Z'],
+    max_samples_per_proto: int = 3,
+    figsize: Tuple[int, int] = (20, 15),
+    alpha: float = 0.3,
+    cmap: str = 'bwr'
+) -> plt.Figure:
+    """
+    Create a gallery showing all prototypes for a class.
+    
+    Rows = prototypes, columns = representative samples.
+    
+    Args:
+        all_signals: Dict mapping prototype_idx -> list of signal arrays
+        all_heatmaps: Dict mapping prototype_idx -> list of heatmap arrays
+        all_distances: Dict mapping prototype_idx -> list of distances
+        class_id: Class ID for labeling
+        axes_names: Names for each channel
+        max_samples_per_proto: Maximum samples to show per prototype
+        figsize: Figure size
+        alpha: Transparency of heatmap overlay
+        cmap: Colormap for heatmap
+        
+    Returns:
+        Matplotlib figure
+    """
+    n_prototypes = len(all_signals)
+    n_channels = all_signals[0][0].shape[0] if n_prototypes > 0 else 3
+    
+    # Each prototype gets a row with multiple sample columns
+    fig = plt.figure(figsize=figsize)
+    fig.suptitle(f'Class {class_id} Prototype Gallery', fontsize=16, y=0.995)
+    
+    gs = fig.add_gridspec(n_prototypes, max_samples_per_proto * n_channels, 
+                          hspace=0.3, wspace=0.1)
+    
+    for proto_idx in range(n_prototypes):
+        signals = all_signals[proto_idx][:max_samples_per_proto]
+        heatmaps = all_heatmaps[proto_idx][:max_samples_per_proto]
+        distances = all_distances[proto_idx][:max_samples_per_proto]
+        
+        for samp_idx, (signal, heatmap, dist) in enumerate(zip(signals, heatmaps, distances)):
+            for c in range(n_channels):
+                col_idx = samp_idx * n_channels + c
+                ax = fig.add_subplot(gs[proto_idx, col_idx])
+                
+                # Plot signal with heatmap overlay
+                time = np.arange(signal.shape[1])
+                ax.plot(time, signal[c], 'k-', linewidth=0.8, alpha=0.7)
+                
+                # Heatmap overlay
+                vmax = np.abs(heatmap).max()
+                norm = Normalize(vmin=-vmax, vmax=vmax)
+                heat_colors = plt.cm.get_cmap(cmap)(norm(heatmap[c]))
+                
+                for t in range(len(time) - 1):
+                    ax.axvspan(t, t + 1, facecolor=heat_colors[t][:3], alpha=alpha)
+                
+                # Labels
+                if proto_idx == 0 and samp_idx == 0:
+                    ax.set_title(axes_names[c] if c < len(axes_names) else f'Ch{c}', 
+                                fontsize=10)
+                if c == 0:
+                    ax.set_ylabel(f'P{proto_idx}S{samp_idx+1}\nd={dist:.2f}', 
+                                 fontsize=9, rotation=0, labelpad=30)
+                
+                ax.tick_params(labelbottom=False, labelleft=False)
+                ax.grid(True, alpha=0.2)
+    
+    return fig
+
+
+def plot_prototype_comparison(
+    ok_prototypes: List[np.ndarray],
+    nok_prototypes: List[np.ndarray],
+    filter_names: Optional[List[str]] = None,
+    top_k: int = 10,
+    figsize: Tuple[int, int] = (15, 8)
+) -> plt.Figure:
+    """
+    Side-by-side comparison of OK vs NOK prototype filter patterns.
+    
+    Shows which filters differ most between classes to identify
+    discriminative patterns.
+    
+    Args:
+        ok_prototypes: List of OK prototype centers (each of shape (n_filters,))
+        nok_prototypes: List of NOK prototype centers (each of shape (n_filters,))
+        filter_names: Optional names for filters
+        top_k: Number of top differing filters to highlight
+        figsize: Figure size
+        
+    Returns:
+        Matplotlib figure
+    """
+    n_ok = len(ok_prototypes)
+    n_nok = len(nok_prototypes)
+    n_filters = ok_prototypes[0].shape[0]
+    
+    # Average prototype per class
+    ok_mean = np.mean(ok_prototypes, axis=0)
+    nok_mean = np.mean(nok_prototypes, axis=0)
+    
+    # Compute difference
+    diff = np.abs(nok_mean - ok_mean)
+    top_diff_indices = np.argsort(diff)[-top_k:][::-1]
+    
+    fig = plt.figure(figsize=figsize)
+    
+    # Plot 1: Heatmap of all prototypes
+    ax1 = plt.subplot(2, 2, 1)
+    all_prototypes = np.vstack([ok_prototypes, nok_prototypes])
+    im1 = ax1.imshow(all_prototypes, aspect='auto', cmap='RdBu_r', 
+                     vmin=-np.abs(all_prototypes).max(), 
+                     vmax=np.abs(all_prototypes).max())
+    ax1.axhline(y=n_ok - 0.5, color='k', linestyle='--', linewidth=2)
+    ax1.set_ylabel('Prototype')
+    ax1.set_xlabel('Filter Index')
+    ax1.set_title('All Prototype Patterns')
+    ax1.set_yticks(range(n_ok + n_nok))
+    ax1.set_yticklabels([f'OK-{i}' for i in range(n_ok)] + 
+                        [f'NOK-{i}' for i in range(n_nok)])
+    plt.colorbar(im1, ax=ax1, label='Filter Value')
+    
+    # Plot 2: Mean patterns per class
+    ax2 = plt.subplot(2, 2, 2)
+    filter_indices = np.arange(n_filters)
+    ax2.bar(filter_indices, ok_mean, alpha=0.6, label='OK Mean', color='blue')
+    ax2.bar(filter_indices, nok_mean, alpha=0.6, label='NOK Mean', color='red')
+    # Highlight top-k different filters
+    for idx in top_diff_indices:
+        ax2.axvline(x=idx, color='yellow', alpha=0.3, linewidth=3)
+    ax2.set_xlabel('Filter Index')
+    ax2.set_ylabel('Mean Filter Value')
+    ax2.set_title('Mean Prototype per Class')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Difference magnitude
+    ax3 = plt.subplot(2, 2, 3)
+    colors = ['yellow' if i in top_diff_indices else 'gray' for i in range(n_filters)]
+    ax3.bar(filter_indices, diff, color=colors, alpha=0.7)
+    ax3.set_xlabel('Filter Index')
+    ax3.set_ylabel('|NOK - OK|')
+    ax3.set_title(f'Filter Differences (Top-{top_k} highlighted)')
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Top-k filters detail
+    ax4 = plt.subplot(2, 2, 4)
+    x_pos = np.arange(top_k)
+    width = 0.35
+    ax4.bar(x_pos - width/2, ok_mean[top_diff_indices], width, 
+            label='OK', color='blue', alpha=0.6)
+    ax4.bar(x_pos + width/2, nok_mean[top_diff_indices], width, 
+            label='NOK', color='red', alpha=0.6)
+    ax4.set_xlabel('Filter')
+    ax4.set_ylabel('Filter Value')
+    ax4.set_title(f'Top-{top_k} Most Different Filters')
+    ax4.set_xticks(x_pos)
+    if filter_names:
+        ax4.set_xticklabels([filter_names[i] if i < len(filter_names) 
+                            else f'F{i}' for i in top_diff_indices], rotation=45)
+    else:
+        ax4.set_xticklabels([f'F{i}' for i in top_diff_indices], rotation=45)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+
 if __name__ == "__main__":
     # Test visualization functions
     np.random.seed(42)

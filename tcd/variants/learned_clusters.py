@@ -69,7 +69,8 @@ class LearnedClusterTCD:
         layer_name: str = 'conv3',  # Use conv3 for richer concept space (64 filters)
         covariance_type: str = 'diag',
         n_init: int = 5,
-        max_iter: int = 200
+        max_iter: int = 200,
+        balance_method: str = 'downsample'
     ):
         """
         Initialize learned cluster TCD.
@@ -80,6 +81,7 @@ class LearnedClusterTCD:
             covariance_type: GMM covariance ('diag' recommended for 64+ dims, 'full', 'tied', 'spherical')
             n_init: Number of GMM initializations (default 5 for better convergence)
             max_iter: Maximum GMM iterations (default 200 for 64-dim convergence)
+            balance_method: Method for handling class imbalance ('downsample' or 'oversample')
         """
         self.n_prototypes = n_prototypes
         self.layer_name = layer_name
@@ -89,7 +91,8 @@ class LearnedClusterTCD:
             n_prototypes=n_prototypes,
             covariance_type=covariance_type,
             n_init=n_init,
-            max_iter=max_iter
+            max_iter=max_iter,
+            balance_method=balance_method
         )
         
         self.fitted = False

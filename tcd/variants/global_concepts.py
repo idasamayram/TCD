@@ -38,7 +38,8 @@ class GlobalWindowAnalysis:
         window_size: int = 40,
         n_top_positions: Optional[int] = 10,
         threshold_factor: float = 1.5,
-        per_class: bool = True
+        per_class: bool = True,
+        use_signed_relevance: bool = False
     ):
         """
         Initialize global window analyzer.
@@ -48,11 +49,15 @@ class GlobalWindowAnalysis:
             n_top_positions: Number of top window positions to select (None = use threshold)
             threshold_factor: For threshold mode: keep windows with importance > mean + factor*std
             per_class: If True, find important windows per class; else across all data
+            use_signed_relevance: If True, use mean signed relevance instead of mean absolute
+                                 This is useful for signed composites (AlphaBeta+Gamma)
+                                 where positive = supports prediction, negative = argues against
         """
         self.window_size = window_size
         self.n_top_positions = n_top_positions
         self.threshold_factor = threshold_factor
         self.per_class = per_class
+        self.use_signed_relevance = use_signed_relevance
         
         self.important_windows: Dict[int, List[Tuple[int, int, float]]] = {}
     
@@ -116,9 +121,14 @@ class GlobalWindowAnalysis:
                 # Extract window from all samples
                 window_heatmaps = class_heatmaps[:, :, start_pos:end_pos]  # (N_class, C, win_size)
                 
-                # Compute mean absolute importance across samples and channels
+                # Compute mean importance across samples and channels
                 # This gives us: "how important is this temporal position on average?"
-                mean_importance = torch.abs(window_heatmaps).mean().item()
+                if self.use_signed_relevance:
+                    # Use signed relevance - preserves positive/negative contributions
+                    mean_importance = window_heatmaps.mean().item()
+                else:
+                    # Use absolute relevance (default) - only magnitude matters
+                    mean_importance = torch.abs(window_heatmaps).mean().item()
                 
                 window_importances.append(mean_importance)
                 window_positions.append((start_pos, end_pos))

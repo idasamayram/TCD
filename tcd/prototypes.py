@@ -42,7 +42,8 @@ class TemporalPrototypeDiscovery:
         covariance_type: str = 'diag',
         n_init: int = 5,
         max_iter: int = 200,
-        random_state: int = 0
+        random_state: int = 0,
+        balance_method: str = 'downsample'
     ):
         """
         Initialize prototype discovery.
@@ -54,12 +55,16 @@ class TemporalPrototypeDiscovery:
             n_init: Number of GMM initializations (default 5 for better convergence)
             max_iter: Maximum GMM iterations (default 200 for convergence in 64-dim space)
             random_state: Random seed
+            balance_method: Method for handling class imbalance ('downsample' or 'oversample')
+                          'downsample' (default): Sample from majority to match minority
+                          'oversample': Replicate minority samples (with jitter)
         """
         self.n_prototypes = n_prototypes
         self.covariance_type = covariance_type
         self.n_init = n_init
         self.max_iter = max_iter
         self.random_state = random_state
+        self.balance_method = balance_method
         
         self.gmms: Dict[int, GaussianMixture] = {}
         self.class_features: Dict[int, torch.Tensor] = {}
@@ -93,6 +98,9 @@ class TemporalPrototypeDiscovery:
         # Get unique classes
         unique_classes = torch.unique(labels).cpu().numpy()
         
+        # First pass: collect class sizes for downsampling
+        class_sizes = {}
+        class_data = {}
         for class_id in unique_classes:
             # Filter to correctly predicted samples of this class
             mask = (labels == class_id) & (predictions == class_id)
@@ -103,30 +111,64 @@ class TemporalPrototypeDiscovery:
                       f"samples, need at least {self.n_prototypes} for GMM")
                 continue
             
+            class_sizes[class_id] = class_features.shape[0]
+            class_data[class_id] = {
+                'features': class_features,
+                'mask': mask
+            }
+        
+        # Determine target size for balancing
+        if class_weights is not None and self.balance_method == 'downsample':
+            # Find minority class size (highest weight means smallest class)
+            minority_size = min(class_sizes.values())
+            print(f"\nBalancing method: {self.balance_method}")
+            print(f"Target size: {minority_size} (minority class size)")
+        
+        for class_id in unique_classes:
+            if class_id not in class_data:
+                continue
+            
+            class_features = class_data[class_id]['features']
+            mask = class_data[class_id]['mask']
+            
             # Store for later use
             self.class_features[class_id] = class_features
             if sample_ids is not None:
                 self.class_sample_ids[class_id] = sample_ids[mask.cpu().numpy()]
             
-            # Handle class weights via oversampling (sklearn GMM doesn't support sample_weights)
+            # Handle class balancing
             features_for_gmm = class_features.cpu().numpy()
-            if class_weights is not None and class_weights[class_id] > 1.0:
-                # For minority classes (weight > 1), oversample to balance influence
-                weight = class_weights[class_id].item()
-                # Round to nearest integer for oversampling factor
-                oversample_factor = max(1, int(round(weight)))
-                if oversample_factor > 1:
-                    # Replicate samples with slight jitter to avoid exact duplicates
-                    # Use seeded random state for reproducibility
-                    n_samples = features_for_gmm.shape[0]
-                    oversampled = [features_for_gmm]
-                    rng = np.random.RandomState(self.random_state)
-                    for _ in range(oversample_factor - 1):
-                        # Add small noise to avoid identical samples
-                        jittered = features_for_gmm + rng.normal(0, 1e-5, features_for_gmm.shape)
-                        oversampled.append(jittered)
-                    features_for_gmm = np.concatenate(oversampled, axis=0)
-                    print(f"Class {class_id}: Oversampled by {oversample_factor}x due to class weight {weight:.2f}")
+            
+            if class_weights is not None:
+                if self.balance_method == 'downsample':
+                    # Downsample majority class to minority class size
+                    if class_sizes[class_id] > minority_size:
+                        rng = np.random.RandomState(self.random_state)
+                        sample_indices = rng.choice(
+                            class_sizes[class_id], 
+                            size=minority_size, 
+                            replace=False
+                        )
+                        features_for_gmm = features_for_gmm[sample_indices]
+                        print(f"Class {class_id}: Downsampled from {class_sizes[class_id]} to {minority_size} samples")
+                    else:
+                        print(f"Class {class_id}: No downsampling needed ({class_sizes[class_id]} samples)")
+                
+                elif self.balance_method == 'oversample' and class_weights[class_id] > 1.0:
+                    # Oversample minority class with jittered duplication (backward compatibility)
+                    weight = class_weights[class_id].item()
+                    oversample_factor = max(1, int(round(weight)))
+                    
+                    if oversample_factor > 1:
+                        n_samples = features_for_gmm.shape[0]
+                        oversampled = [features_for_gmm]
+                        rng = np.random.RandomState(self.random_state)
+                        for _ in range(oversample_factor - 1):
+                            # Add small noise to avoid identical samples
+                            jittered = features_for_gmm + rng.normal(0, 1e-5, features_for_gmm.shape)
+                            oversampled.append(jittered)
+                        features_for_gmm = np.concatenate(oversampled, axis=0)
+                        print(f"Class {class_id}: Oversampled by {oversample_factor}x due to class weight {weight:.2f}")
             
             # Fit GMM
             gmm = GaussianMixture(
@@ -143,7 +185,7 @@ class TemporalPrototypeDiscovery:
             self.gmms[class_id] = gmm
             
             print(f"Class {class_id}: Fitted GMM with {self.n_prototypes} prototypes "
-                  f"on {class_features.shape[0]} samples")
+                  f"on {features_for_gmm.shape[0]} samples (original: {class_features.shape[0]})")
     
     def find_prototypes(
         self,
