@@ -40,19 +40,31 @@ class ChannelConcept(_ChannelConcept):
     def attribute(
         self, 
         relevance: torch.Tensor,
-        abs_norm: bool = True
+        abs_norm: bool = True,
+        signed_norm: bool = False
     ) -> torch.Tensor:
         """
         Compute per-channel concept relevance.
         
         Args:
             relevance: Layer relevance tensor of shape (B, C, T)
-            abs_norm: If True, use absolute values before summing
+            abs_norm: If True, use absolute values before summing (default behavior)
+            signed_norm: If True, sum relevance with sign (overrides abs_norm)
+                        This preserves positive/negative contributions in signed composites
+                        like AlphaBeta+Gamma (CNCValidatedComposite)
             
         Returns:
             Concept relevance of shape (B, C) - one value per channel/filter
         """
-        return super().attribute(relevance, abs_norm=abs_norm)
+        # signed_norm takes precedence over abs_norm
+        if signed_norm:
+            # Sum relevance preserving sign - for signed composites
+            # relevance shape: (B, C, T) -> (B, C)
+            shape = relevance.shape
+            return relevance.view(*shape[:2], -1).sum(dim=2)
+        else:
+            # Use parent's abs_norm behavior
+            return super().attribute(relevance, abs_norm=abs_norm)
 
 
 class FilterBankConcept:

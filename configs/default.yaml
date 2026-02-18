@@ -15,6 +15,8 @@ data:
 analysis:
   layers: ["conv1", "conv2", "conv3", "conv4"]  # Conv layer names for CRP (flat attributes)
   composite: "cnc_validated"  # LRP composite rule validated on CNC vibration data
+  concept_extraction_composite: "cnc_validated"  # Composite for concept extraction (Option A: use "epsilon_plus_flat" for all-positive relevance)
+  use_signed_relevance: false  # If true, preserve sign in relevance (Option B: handle positive/negative contributions separately)
   batch_size: 4  # Small batch for CRP memory constraints (full backward graph required)
   use_class_weights: true  # Apply inverse-frequency class weights to concept relevances
 
@@ -26,12 +28,13 @@ tcd:
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
   n_prototypes: 4  # Number of prototypes per class (or use auto_select_n_prototypes)
   auto_select_n_prototypes: false  # If true, use BIC to select optimal n_prototypes
-  min_prototypes: 2  # Min for auto-selection
-  max_prototypes: 10  # Max for auto-selection
+  min_prototypes: 1  # Min for auto-selection (BIC may select 1 = single strategy per class)
+  max_prototypes: 6  # Max for auto-selection
   top_k_samples: 6  # Top-k samples per prototype for visualization
   gmm_covariance: "diag"  # Better for high-dimensional (64+ dims): 'diag', 'full', 'tied', 'spherical'
   gmm_n_init: 5  # Number of GMM initializations (increased from 1 for better convergence)
   gmm_max_iter: 200  # Maximum GMM iterations (increased from 10 for 64-dim convergence)
+  balance_method: "downsample"  # Method for handling class imbalance: 'downsample' (default) or 'oversample'
   
   # Global window analysis (for interpretation)
   global_windows:
@@ -39,6 +42,7 @@ tcd:
     n_top_positions: 10  # Select top-10 window positions globally (None = use threshold)
     threshold_factor: 1.5  # For threshold mode: keep windows with importance > mean + factor*std
     per_class: true  # Find important windows per class
+    use_signed_relevance: false  # If true, use mean signed relevance instead of absolute (for signed composites)
   
   # Interpretation features (applied to globally-important windows)
   interpretation_features:
