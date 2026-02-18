@@ -481,11 +481,26 @@ def run_variant_c(
         labels=labels,
         layer_name=layer_name
     )
-    
+
+    # Add around line 475, before interpreter.interpret_prototypes()
+    from models.cnn1d_model import VibrationDataset
+    signals = None
+    if data_path and os.path.exists(data_path):
+        print("Loading raw signals for interpretation...")
+        temp_dataset = VibrationDataset(data_path)
+        # Stack all signals in same order as features (class 0 first, then class 1)
+        signals_list = []
+        for class_id in [0, 1]:
+            class_indices = [i for i, (_, label) in enumerate(temp_dataset) if label == class_id]
+            for idx in class_indices:
+                signals_list.append(temp_dataset[idx][0])
+        signals = torch.stack(signals_list)
+        print(f"  Loaded signals: {signals.shape}")
+
     interpretations = interpreter.interpret_prototypes(
         global_windows=global_windows or {},
         heatmaps=heatmaps,
-        signals=None,  # Could load raw signals if available
+        signals=signals,  # Could load raw signals if available,  but Now it actually has data
         top_k_filters=10
     )
     
