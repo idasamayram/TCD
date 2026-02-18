@@ -314,6 +314,165 @@ def compare_prototype_distributions(
     }
 
 
+def robustness_deviation_analysis(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    prototype_discovery: TemporalPrototypeDiscovery,
+    deviation_threshold: float = 2.0
+) -> Dict:
+    """
+    Prototype deviation analysis for robustness (PCX Section 3.3).
+    
+    Following PCX Equation 6: Δ_i^k(ν) = ν - μ_i^k
+    
+    For each test sample:
+    1. Compute its concept relevance vector ν
+    2. Assign it to the most likely prototype using assign_prototype()
+    3. Compute deviation Δ = ν - μ
+    4. Flag samples with high deviation (||Δ|| > mean + threshold*std) as potential OOD
+    5. Compute per-class deviation statistics
+    
+    Args:
+        features: Concept relevance vectors of shape (N, n_concepts)
+        labels: Class labels of shape (N,)
+        prototype_discovery: Fitted TemporalPrototypeDiscovery instance
+        deviation_threshold: Threshold for flagging high-deviation samples
+                            (in units of standard deviations)
+    
+    Returns:
+        Dictionary with:
+            - per_sample_deviations: Deviation magnitude per sample
+            - per_sample_flags: Boolean flags for high-deviation samples
+            - class_statistics: Per-class deviation statistics
+            - flagged_samples: Indices of flagged samples
+            - ood_scores: Optional OOD scores using GMM log-likelihood
+    """
+    print("\n" + "="*60)
+    print("PROTOTYPE DEVIATION ANALYSIS FOR ROBUSTNESS")
+    print("="*60)
+    
+    unique_classes = torch.unique(labels).cpu().numpy()
+    
+    # Store results
+    per_sample_deviations = np.zeros(len(features))
+    per_sample_flags = np.zeros(len(features), dtype=bool)
+    per_sample_assignments = np.zeros(len(features), dtype=int)
+    class_statistics = {}
+    
+    for class_id in unique_classes:
+        if class_id not in prototype_discovery.gmms:
+            continue
+        
+        class_mask = labels == class_id
+        class_features = features[class_mask]
+        class_indices = np.where(class_mask.cpu().numpy())[0]
+        
+        gmm = prototype_discovery.gmms[class_id]
+        class_name = "OK" if class_id == 0 else "NOK"
+        
+        print(f"\nClass {class_id} ({class_name}):")
+        print(f"  Samples: {len(class_features)}")
+        
+        # Assign each sample to its closest prototype
+        assignments = prototype_discovery.assign_prototype(class_features, class_id)
+        
+        # Compute deviation for each sample
+        deviations = []
+        deviation_magnitudes = []
+        
+        for i in range(len(class_features)):
+            sample_features = class_features[i]
+            proto_idx = assignments[i]
+            prototype_mean = gmm.means_[proto_idx]
+            
+            # Deviation: Δ = ν - μ
+            deviation = sample_features.cpu().numpy() - prototype_mean
+            deviation_magnitude = np.linalg.norm(deviation)
+            
+            deviations.append(deviation)
+            deviation_magnitudes.append(deviation_magnitude)
+            
+            # Store globally
+            global_idx = class_indices[i]
+            per_sample_deviations[global_idx] = deviation_magnitude
+            per_sample_assignments[global_idx] = proto_idx
+        
+        deviation_magnitudes = np.array(deviation_magnitudes)
+        
+        # Compute statistics
+        mean_deviation = deviation_magnitudes.mean()
+        std_deviation = deviation_magnitudes.std()
+        threshold = mean_deviation + deviation_threshold * std_deviation
+        
+        # Flag high-deviation samples
+        high_deviation_mask = deviation_magnitudes > threshold
+        n_flagged = high_deviation_mask.sum()
+        pct_flagged = 100.0 * n_flagged / len(class_features)
+        
+        # Store flags globally
+        flagged_indices = class_indices[high_deviation_mask]
+        per_sample_flags[flagged_indices] = True
+        
+        # Compute log-likelihood for OOD scoring (PCX Equation 4)
+        log_likelihood = gmm.score_samples(class_features.cpu().numpy())
+        mean_log_likelihood = log_likelihood.mean()
+        
+        # Store class statistics
+        class_statistics[int(class_id)] = {
+            'mean_deviation': float(mean_deviation),
+            'std_deviation': float(std_deviation),
+            'threshold': float(threshold),
+            'n_flagged': int(n_flagged),
+            'pct_flagged': float(pct_flagged),
+            'mean_log_likelihood': float(mean_log_likelihood),
+            'min_deviation': float(deviation_magnitudes.min()),
+            'max_deviation': float(deviation_magnitudes.max()),
+            'median_deviation': float(np.median(deviation_magnitudes))
+        }
+        
+        print(f"  Mean deviation: {mean_deviation:.4f}")
+        print(f"  Std deviation: {std_deviation:.4f}")
+        print(f"  Threshold (mean + {deviation_threshold}*std): {threshold:.4f}")
+        print(f"  Flagged samples: {n_flagged} ({pct_flagged:.1f}%)")
+        print(f"  Mean log-likelihood: {mean_log_likelihood:.4f}")
+        
+        # Show per-prototype breakdown
+        print(f"  Per-prototype deviation:")
+        for proto_idx in range(prototype_discovery.n_prototypes):
+            proto_mask = assignments == proto_idx
+            if proto_mask.sum() > 0:
+                proto_deviations = deviation_magnitudes[proto_mask]
+                print(f"    Prototype {proto_idx}: mean={proto_deviations.mean():.4f}, "
+                      f"std={proto_deviations.std():.4f}, n={proto_mask.sum()}")
+    
+    # Overall summary
+    print("\n" + "="*60)
+    print("OVERALL ROBUSTNESS SUMMARY")
+    print("="*60)
+    total_flagged = per_sample_flags.sum()
+    total_samples = len(features)
+    overall_pct_flagged = 100.0 * total_flagged / total_samples
+    
+    print(f"Total flagged samples: {total_flagged} / {total_samples} ({overall_pct_flagged:.1f}%)")
+    
+    if overall_pct_flagged > 20:
+        print("  ⚠️  WARNING: >20% samples flagged - model may have robustness issues")
+    elif overall_pct_flagged > 10:
+        print("  ⚠️  CAUTION: >10% samples flagged - some outliers detected")
+    else:
+        print("  ✓  Good: <10% samples flagged")
+    
+    return {
+        'per_sample_deviations': per_sample_deviations,
+        'per_sample_flags': per_sample_flags,
+        'per_sample_assignments': per_sample_assignments,
+        'class_statistics': class_statistics,
+        'flagged_sample_indices': np.where(per_sample_flags)[0].tolist(),
+        'overall_pct_flagged': overall_pct_flagged,
+        'deviation_threshold': deviation_threshold
+    }
+
+
 if __name__ == "__main__":
     # Test cross-machine analysis with synthetic data
     print("Testing cross-machine robustness analysis...")

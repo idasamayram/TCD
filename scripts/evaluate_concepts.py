@@ -450,6 +450,85 @@ def evaluate_variant_c(
         except Exception as e:
             print(f"  Warning: Could not generate concept heatmaps: {e}")
     
+    # Robustness deviation analysis if enabled
+    if config.get('evaluation', {}).get('robustness_analysis', True):
+        from tcd.robustness import robustness_deviation_analysis
+        from tcd.visualization import plot_deviation_matrix
+        
+        print("\nPerforming robustness deviation analysis...")
+        
+        deviation_threshold = config.get('evaluation', {}).get('deviation_threshold', 2.0)
+        
+        try:
+            robustness_results = robustness_deviation_analysis(
+                features=features,
+                labels=labels,
+                prototype_discovery=tcd.prototype_discovery,
+                deviation_threshold=deviation_threshold
+            )
+            
+            # Print summary
+            print("\nRobustness Summary:")
+            for class_id, stats in robustness_results['class_statistics'].items():
+                class_name = "OK" if class_id == 0 else "NOK"
+                print(f"  {class_name} (Class {class_id}): {stats['pct_flagged']:.1f}% samples flagged as unusual")
+            
+            # Generate deviation matrix visualization
+            print("\nGenerating deviation matrix visualizations...")
+            
+            for class_id in [0, 1]:
+                if class_id not in robustness_results['class_statistics']:
+                    continue
+                
+                class_mask = labels == class_id
+                class_features = features[class_mask]
+                class_deviations_all = robustness_results['per_sample_deviations'][class_mask.cpu().numpy()]
+                class_assignments = robustness_results['per_sample_assignments'][class_mask.cpu().numpy()]
+                
+                # For visualization, show deviations for top 50 samples (or fewer if not available)
+                n_samples_to_show = min(50, len(class_features))
+                
+                # Compute deviations per concept for visualization
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                
+                # Get samples sorted by deviation magnitude
+                sorted_indices = np.argsort(class_deviations_all)[-n_samples_to_show:][::-1]
+                
+                deviations_matrix = []
+                for idx in sorted_indices:
+                    sample_features = class_features[idx]
+                    proto_idx = class_assignments[idx]
+                    prototype_mean = gmm.means_[proto_idx]
+                    deviation = sample_features.cpu().numpy() - prototype_mean
+                    deviations_matrix.append(deviation)
+                
+                deviations_matrix = np.array(deviations_matrix)
+                
+                # Plot deviation matrix
+                concept_labels = [f"F{i}" for i in range(features.shape[1])]
+                sample_labels = [f"S{i}" for i in sorted_indices]
+                
+                class_name = "OK" if class_id == 0 else "NOK"
+                fig = plot_deviation_matrix(
+                    deviations=deviations_matrix,
+                    concept_labels=concept_labels,
+                    sample_labels=sample_labels,
+                    title=f'Deviation Matrix - {class_name} (Top {n_samples_to_show} by deviation magnitude)'
+                )
+                
+                deviation_path = os.path.join(output_path, f'deviation_matrix_class_{class_id}.png')
+                fig.savefig(deviation_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved deviation matrix to {deviation_path}")
+            
+            # Add robustness results to evaluation
+            evaluation['robustness'] = robustness_results
+            
+        except Exception as e:
+            print(f"  Warning: Could not perform robustness analysis: {e}")
+            import traceback
+            traceback.print_exc()
+    
     # Note: plot_prototype_samples requires loading actual signals from samples
     # For a complete implementation, we would load the closest samples to each prototype
     # and generate visualizations. For now we note this requirement.
