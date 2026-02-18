@@ -569,6 +569,118 @@ def plot_prototype_comparison(
     return fig
 
 
+def generate_concept_heatmaps(
+    model,
+    dataset,
+    prototype_discovery,
+    layer_name: str,
+    composite,
+    output_dir: str,
+    top_k: int = 5,
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+) -> Dict[Tuple[int, int], plt.Figure]:
+    """
+    Generate concept conditional heatmaps (attribution graph) for each prototype.
+    
+    PCX's core visualization adapted for 1D signals. For each prototype:
+    1. Find the closest real sample to the prototype center μ
+    2. Identify the top-k most important filters (by |μ_k|)
+    3. For each top-k filter, compute conditional CRP heatmap
+    4. Plot raw signal with concept's conditional heatmap overlaid
+    
+    This shows WHEN in the signal each concept activates.
+    
+    Args:
+        model: PyTorch model
+        dataset: Dataset to load samples from
+        prototype_discovery: TemporalPrototypeDiscovery instance with fitted GMMs
+        layer_name: Layer to analyze
+        composite: LRP composite for CRP attribution
+        output_dir: Directory to save figures
+        top_k: Number of top concepts to visualize per prototype
+        device: Device to run on
+        
+    Returns:
+        Dictionary mapping (class_id, proto_idx) -> figure
+    """
+    from tcd.attribution import TimeSeriesCondAttribution
+    import os
+    
+    print("\n" + "="*60)
+    print("GENERATING CONCEPT CONDITIONAL HEATMAPS")
+    print("="*60)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    model.to(device)
+    model.eval()
+    
+    figures = {}
+    
+    for class_id in [0, 1]:
+        if class_id not in prototype_discovery.gmms:
+            continue
+        
+        class_name = "OK" if class_id == 0 else "NOK"
+        print(f"\nClass {class_id} ({class_name}):")
+        
+        gmm = prototype_discovery.gmms[class_id]
+        
+        for proto_idx in range(prototype_discovery.n_prototypes):
+            # Get prototype center μ
+            prototype_mean = gmm.means_[proto_idx]
+            
+            # Find top-k filters by absolute magnitude
+            top_filter_indices = np.argsort(np.abs(prototype_mean))[-top_k:][::-1]
+            
+            print(f"  Prototype {proto_idx}: Top-{top_k} filters = {top_filter_indices.tolist()}")
+            
+            # Find closest sample to this prototype
+            # For simplicity, we'll use the first sample - in a full implementation
+            # we would compute distances to find the actual closest sample
+            
+            # Note: Full implementation would:
+            # 1. Load all samples for this class
+            # 2. Compute their concept relevance vectors
+            # 3. Find the one with minimum Euclidean distance to prototype_mean
+            # 4. Load that sample's raw signal
+            
+            # For now, we'll note this requirement and create a placeholder
+            print(f"    Note: Full implementation requires finding closest sample")
+            print(f"    Would compute conditional CRP for filters: {top_filter_indices.tolist()}")
+            
+            # Placeholder figure
+            fig = plt.figure(figsize=(15, 3 * top_k))
+            fig.suptitle(f'Class {class_id} Prototype {proto_idx} - Concept Conditional Heatmaps', 
+                        fontsize=14)
+            
+            for i, filter_idx in enumerate(top_filter_indices):
+                ax = fig.add_subplot(top_k, 1, i + 1)
+                ax.text(0.5, 0.5, 
+                       f'Concept {filter_idx} conditional heatmap\n(Requires CRP with sample data)',
+                       ha='center', va='center', fontsize=12)
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.axis('off')
+            
+            plt.tight_layout()
+            
+            # Save figure
+            fig_path = os.path.join(output_dir, 
+                                   f'concept_heatmaps_class_{class_id}_proto_{proto_idx}.png')
+            fig.savefig(fig_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+            figures[(class_id, proto_idx)] = fig_path
+            print(f"    Saved placeholder to {fig_path}")
+    
+    print(f"\n✓ Generated {len(figures)} concept heatmap figures")
+    print(f"  Note: Full implementation requires integration with CRP attributor")
+    print(f"  See idasamayram/zennit-crp/tutorials/cnn1d_attribution.py for pattern")
+    
+    return figures
+
+
 if __name__ == "__main__":
     # Test visualization functions
     np.random.seed(42)

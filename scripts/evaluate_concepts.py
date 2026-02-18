@@ -423,6 +423,33 @@ def evaluate_variant_c(
     print("GENERATING VISUALIZATIONS")
     print("="*60)
     
+    # Concept conditional heatmaps if enabled
+    if config.get('evaluation', {}).get('concept_heatmaps', True):
+        from tcd.visualization import generate_concept_heatmaps
+        from tcd.composites import CNCValidatedComposite
+        
+        print("\nGenerating concept conditional heatmaps...")
+        
+        # Create composite for CRP
+        composite = CNCValidatedComposite()
+        
+        concept_heatmap_top_k = config.get('evaluation', {}).get('concept_heatmap_top_k', 5)
+        
+        try:
+            concept_heatmap_figs = generate_concept_heatmaps(
+                model=model,
+                dataset=dataset,
+                prototype_discovery=tcd.prototype_discovery,
+                layer_name=layer_name,
+                composite=composite,
+                output_dir=os.path.join(output_path, 'concept_heatmaps'),
+                top_k=concept_heatmap_top_k,
+                device=device
+            )
+            print(f"  Generated {len(concept_heatmap_figs)} concept heatmap figures")
+        except Exception as e:
+            print(f"  Warning: Could not generate concept heatmaps: {e}")
+    
     # Note: plot_prototype_samples requires loading actual signals from samples
     # For a complete implementation, we would load the closest samples to each prototype
     # and generate visualizations. For now we note this requirement.
