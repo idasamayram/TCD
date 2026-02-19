@@ -22,7 +22,7 @@ analysis:
 
 tcd:
   variant: "C"  # PRIMARY: C (CRP-native concepts), A (filterbank/window), B (temporal), D (vibration features)
-  primary_layer: "conv3"  # Layer to use for concept discovery (conv3 has 64 filters)
+  primary_layer: "conv4"  # Layer to use for concept discovery (conv3 has 64 filters) -- changed to conv4 for more direct output impact, but conv3 may yield richer concepts
   n_concepts: 6  # Number of concepts for window-based discovery (Variant A)
   
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
