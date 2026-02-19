@@ -10,6 +10,9 @@ Three types of robustness tests:
 2. Time-shift: Circular shift the signal by small amounts
 3. Channel dropout: Zero out individual accelerometer axes (X/Y/Z)
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 import torch
