@@ -220,7 +220,9 @@ def run_variant_c(
     print("\n" + "="*80)
     print("VARIANT C: CRP-Native Concepts with GMM Prototypes (PRIMARY METHOD)")
     print("="*80)
-    
+
+    os.makedirs(output_path, exist_ok=True)
+
     # Get layer name from config if not specified
     if layer_name is None:
         layer_name = config['tcd'].get('primary_layer', 'conv3')
@@ -541,7 +543,7 @@ def run_variant_c(
     
     # For visualizations, we need signals. For now we'll use heatmaps as proxy
     # In a full implementation, we'd load actual signals from dataset
-    
+    os.makedirs(output_path, exist_ok=True)
     # Generate prototype comparison (OK vs NOK)
     print("\nGenerating prototype comparison plot...")
     try:
@@ -565,7 +567,12 @@ def run_variant_c(
                 filter_names=[f"F{i}" for i in range(features.shape[1])],
                 top_k=10
             )
-            comparison_path = os.path.join(output_path, 'prototype_comparison.png')
+
+            comparison_dir = Path(output_path)
+            comparison_dir.mkdir(parents=True, exist_ok=True)
+            comparison_path = str(comparison_dir / 'prototype_comparison.png')
+
+            # comparison_path = os.path.join(output_path, 'prototype_comparison.png')
             fig.savefig(comparison_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
             print(f"  Saved prototype comparison to {comparison_path}")
