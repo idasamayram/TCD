@@ -28,7 +28,8 @@ from .robustness import (
     shift_robustness,
     channel_dropout_robustness,
     run_robustness_analysis,
-    print_robustness_report
+    print_robustness_report,
+    robustness_deviation_analysis
 )
 from .interpretation import ConceptInterpreter, extract_sample_features
 
@@ -81,6 +82,7 @@ __all__ = [
     'channel_dropout_robustness',
     'run_robustness_analysis',
     'print_robustness_report',
+    'robustness_deviation_analysis',
     
     # Interpretation
     'ConceptInterpreter',

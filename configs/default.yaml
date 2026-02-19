@@ -45,6 +45,7 @@ tcd:
   
   # Important windows extraction (CNC-style per-sample analysis)
   important_windows:
+    enabled: false  # Set to true to enable per-sample window analysis (disabled by default for Variant C)
     method: "per_sample"  # "per_sample" (CNC-style) or "global" (old averaging)
     n_top_windows: 10  # Top windows per sample
     window_size: 40  # Timesteps per window
