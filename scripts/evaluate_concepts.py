@@ -14,6 +14,7 @@ Usage:
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import argparse
 import os
 import yaml
@@ -451,6 +452,23 @@ def evaluate_variant_c(
         except Exception as e:
             print(f"  Warning: Could not generate concept heatmaps: {e}")
     
+    # Save evaluation
+    os.makedirs(output_path, exist_ok=True)
+    evaluation = {
+        'variant': 'C',
+        'layer_name': layer_name,
+        'metrics': metrics,
+        'importance_scores': importance_scores,
+        'importance_scores_class_0': importance_scores_class_0,
+        'importance_scores_class_1': importance_scores_class_1,
+        'metrics_class_0': metrics_class_0,
+        'metrics_class_1': metrics_class_1,
+        'prototype_intervention': proto_results
+    }
+
+
+
+
     # Robustness deviation analysis if enabled
     if config.get('evaluation', {}).get('robustness_analysis', True):
         from tcd.robustness import robustness_deviation_analysis
@@ -537,6 +555,8 @@ def evaluate_variant_c(
     print("  This would be added in a complete implementation with dataset access")
     
     # Save evaluation
+    '''
+    # moved the save before robustness analysis to ensure we have something saved even if robustness fails
     os.makedirs(output_path, exist_ok=True)
     evaluation = {
         'variant': 'C',
@@ -549,9 +569,12 @@ def evaluate_variant_c(
         'metrics_class_1': metrics_class_1,
         'prototype_intervention': proto_results
     }
+    '''
     
     with open(os.path.join(output_path, 'evaluation.pkl'), 'wb') as f:
         pickle.dump(evaluation, f)
+
+
     
     print(f"\n✓ Evaluation saved to {output_path}")
 
