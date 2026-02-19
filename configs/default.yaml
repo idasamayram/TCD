@@ -2,7 +2,7 @@
 # Temporal Concept Discovery for 1D time-series vibration data
 
 model:
-  path: "./cnn1d_model_final.ckpt"
+  path: "./cnn1d_model_new.ckpt"
   name: "./cnn1d_wide"
 
 data:
