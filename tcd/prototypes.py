@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from sklearn.mixture import GaussianMixture
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 
 
 class TemporalPrototypeDiscovery:
@@ -38,7 +38,7 @@ class TemporalPrototypeDiscovery:
     
     def __init__(
         self,
-        n_prototypes: int = 4,
+        n_prototypes: Union[int, Dict[int, int]] = 4,
         covariance_type: str = 'diag',
         n_init: int = 5,
         max_iter: int = 200,
@@ -49,7 +49,9 @@ class TemporalPrototypeDiscovery:
         Initialize prototype discovery.
         
         Args:
-            n_prototypes: Number of prototypes per class
+            n_prototypes: Number of prototypes per class. Can be an int (same for all
+                         classes) or a dict mapping class_id -> n_prototypes for
+                         per-class control.
             covariance_type: GMM covariance type ('full', 'tied', 'diag', 'spherical')
                            Default 'diag' is better for high-dimensional data (64+ dims)
             n_init: Number of GMM initializations (default 5 for better convergence)
@@ -60,6 +62,11 @@ class TemporalPrototypeDiscovery:
                           'oversample': Replicate minority samples (with jitter)
         """
         self.n_prototypes = n_prototypes
+        # Build per-class lookup; resolved to a concrete int per class during fit
+        if isinstance(n_prototypes, dict):
+            self.n_prototypes_per_class: Dict[int, int] = {int(k): int(v) for k, v in n_prototypes.items()}
+        else:
+            self.n_prototypes_per_class = {}  # resolved dynamically in fit()
         self.covariance_type = covariance_type
         self.n_init = n_init
         self.max_iter = max_iter
@@ -106,9 +113,12 @@ class TemporalPrototypeDiscovery:
             mask = (labels == class_id) & (predictions == class_id)
             class_features = features[mask]
             
-            if class_features.shape[0] < self.n_prototypes:
+            # Resolve n_prototypes for this class
+            n_proto_check = int(self.n_prototypes_per_class.get(int(class_id), self.n_prototypes))
+            
+            if class_features.shape[0] < n_proto_check:
                 print(f"Warning: Class {class_id} has only {class_features.shape[0]} "
-                      f"samples, need at least {self.n_prototypes} for GMM")
+                      f"samples, need at least {n_proto_check} for GMM")
                 continue
             
             class_sizes[class_id] = class_features.shape[0]
@@ -130,6 +140,9 @@ class TemporalPrototypeDiscovery:
             
             class_features = class_data[class_id]['features']
             mask = class_data[class_id]['mask']
+            
+            # Resolve n_prototypes for this class
+            n_proto = int(self.n_prototypes_per_class.get(int(class_id), self.n_prototypes))
             
             # Store for later use
             self.class_features[class_id] = class_features
@@ -172,7 +185,7 @@ class TemporalPrototypeDiscovery:
             
             # Fit GMM
             gmm = GaussianMixture(
-                n_components=self.n_prototypes,
+                n_components=n_proto,
                 covariance_type=self.covariance_type,
                 n_init=self.n_init,
                 max_iter=self.max_iter,
@@ -184,7 +197,7 @@ class TemporalPrototypeDiscovery:
             gmm.fit(features_for_gmm)
             self.gmms[class_id] = gmm
             
-            print(f"Class {class_id}: Fitted GMM with {self.n_prototypes} prototypes "
+            print(f"Class {class_id}: Fitted GMM with {n_proto} prototypes "
                   f"on {features_for_gmm.shape[0]} samples (original: {class_features.shape[0]})")
     
     def find_prototypes(
@@ -220,7 +233,7 @@ class TemporalPrototypeDiscovery:
         
         # Find top-k closest samples for each prototype
         prototype_samples = {}
-        for proto_idx in range(self.n_prototypes):
+        for proto_idx in range(gmm.n_components):
             # Get indices of top-k closest samples to this prototype
             closest_indices = np.argsort(distances[:, proto_idx])[:top_k]
             prototype_samples[proto_idx] = closest_indices
@@ -318,10 +331,11 @@ class TemporalPrototypeDiscovery:
         if class_id not in self.gmms:
             raise ValueError(f"No GMM fitted for class {class_id}")
         
+        gmm = self.gmms[class_id]
         features = self.class_features[class_id]
         assignments = self.assign_prototype(features, class_id)
         
-        counts = np.bincount(assignments, minlength=self.n_prototypes)
+        counts = np.bincount(assignments, minlength=gmm.n_components)
         percentages = (counts / counts.sum()) * 100
         
         return percentages
@@ -364,7 +378,7 @@ class TemporalPrototypeDiscovery:
     @staticmethod
     def select_optimal_n_prototypes(
         features: torch.Tensor,
-        min_prototypes: int = 2,
+        min_prototypes: int = 1,
         max_prototypes: int = 10,
         covariance_type: str = 'diag',
         n_init: int = 5,

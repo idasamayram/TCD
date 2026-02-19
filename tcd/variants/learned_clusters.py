@@ -18,7 +18,7 @@ This is the most direct adaptation of PCX to 1D time series.
 
 import torch
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 from tcd.prototypes import TemporalPrototypeDiscovery
 
 
@@ -65,7 +65,7 @@ class LearnedClusterTCD:
     
     def __init__(
         self,
-        n_prototypes: int = 4,
+        n_prototypes: Union[int, Dict[int, int]] = 4,
         layer_name: str = 'conv3',  # Use conv3 for richer concept space (64 filters)
         covariance_type: str = 'diag',
         n_init: int = 5,
@@ -76,7 +76,9 @@ class LearnedClusterTCD:
         Initialize learned cluster TCD.
         
         Args:
-            n_prototypes: Number of prototypes (GMM components) per class
+            n_prototypes: Number of prototypes (GMM components) per class.
+                         Can be an int (same for all classes) or a dict mapping
+                         class_id -> n_prototypes for per-class control.
             layer_name: Layer to extract concepts from
             covariance_type: GMM covariance ('diag' recommended for 64+ dims, 'full', 'tied', 'spherical')
             n_init: Number of GMM initializations (default 5 for better convergence)
@@ -122,7 +124,11 @@ class LearnedClusterTCD:
         self.prototype_discovery.fit(features, labels, outputs, sample_ids, class_weights)
         self.fitted = True
         
-        print(f"✓ Fitted {self.n_prototypes} prototypes per class")
+        if isinstance(self.n_prototypes, dict):
+            proto_summary = ', '.join(f'class {k}: {v}' for k, v in self.n_prototypes.items())
+            print(f"✓ Fitted prototypes per class ({proto_summary})")
+        else:
+            print(f"✓ Fitted {self.n_prototypes} prototypes per class")
     
     def find_prototypes(
         self,
