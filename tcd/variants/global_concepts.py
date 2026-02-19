@@ -566,12 +566,12 @@ class GlobalWindowAnalysis:
             'max_amplitude': float(heat_avg.max()),
             'std_amplitude': float(heat_avg.std()),
             'rms': float(np.sqrt(np.mean(heat_avg**2))),
-            'skewness': 0.0,  # Not meaningful for heatmap
-            'kurtosis': 0.0,
-            'peak_freq': 0.0,
-            'spectral_energy': 0.0,
-            'spectral_centroid': 0.0,
-            'zero_crossing_rate': 0.0
+            'skewness': float('nan'),   # Not computable from heatmap
+            'kurtosis': float('nan'),
+            'peak_freq': float('nan'),
+            'spectral_energy': float('nan'),
+            'spectral_centroid': float('nan'),
+            'zero_crossing_rate': float('nan')
         }
     
     def _compute_per_class_statistics(
@@ -648,8 +648,35 @@ class GlobalWindowAnalysis:
             if feat not in class_0_windows[0]:
                 continue
             
-            values_0 = np.array([w[feat] for w in class_0_windows])
-            values_1 = np.array([w[feat] for w in class_1_windows])
+            values_0 = np.array([w[feat] for w in class_0_windows], dtype=float)
+            values_1 = np.array([w[feat] for w in class_1_windows], dtype=float)
+            
+            # Skip features that are entirely NaN (heatmap-only fallback)
+            if np.all(np.isnan(values_0)) or np.all(np.isnan(values_1)):
+                test_results[feat] = {
+                    't_statistic': float('nan'),
+                    'p_value': float('nan'),
+                    'cohens_d': float('nan'),
+                    'significant': False,
+                    'class_0_mean': float('nan'),
+                    'class_1_mean': float('nan')
+                }
+                continue
+            
+            # Remove NaN values before testing
+            values_0 = values_0[~np.isnan(values_0)]
+            values_1 = values_1[~np.isnan(values_1)]
+            
+            if len(values_0) < 2 or len(values_1) < 2:
+                test_results[feat] = {
+                    't_statistic': float('nan'),
+                    'p_value': float('nan'),
+                    'cohens_d': float('nan'),
+                    'significant': False,
+                    'class_0_mean': float(values_0.mean()) if len(values_0) else float('nan'),
+                    'class_1_mean': float(values_1.mean()) if len(values_1) else float('nan')
+                }
+                continue
             
             # Two-sample t-test
             t_stat, p_value = stats.ttest_ind(values_0, values_1)
@@ -664,7 +691,7 @@ class GlobalWindowAnalysis:
                 't_statistic': float(t_stat),
                 'p_value': float(p_value),
                 'cohens_d': float(cohens_d),
-                'significant': p_value < 0.05,
+                'significant': bool(p_value < 0.05),
                 'class_0_mean': float(values_0.mean()),
                 'class_1_mean': float(values_1.mean())
             }

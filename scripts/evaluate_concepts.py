@@ -343,6 +343,45 @@ def evaluate_variant_c(
                 print(f"    Top-{top_k} filters: {top_filters}")
                 print(f"    Mean probability change: {mean_prob_change:.4f}")
                 print(f"    Prediction flip rate: {flip_rate:.2%}")
+        
+        # --- Prototype diversity diagnostics ---
+        print("\n" + "="*60)
+        print("PROTOTYPE DIVERSITY DIAGNOSTICS")
+        print("="*60)
+        
+        from sklearn.metrics.pairwise import cosine_similarity as sk_cosine_similarity
+        
+        for class_id, class_results in proto_results.items():
+            class_name = "OK" if class_id == 0 else "NOK"
+            if class_id not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[class_id]
+            means = gmm.means_  # (n_prototypes, n_filters)
+            
+            # Inter-prototype cosine similarity
+            if len(means) > 1:
+                sim_matrix = sk_cosine_similarity(means)
+                # Off-diagonal mean
+                n_p = len(means)
+                off_diag = [sim_matrix[i, j] for i in range(n_p) for j in range(n_p) if i != j]
+                mean_inter_sim = float(np.mean(off_diag))
+                print(f"\nClass {class_id} ({class_name}):")
+                print(f"  Mean inter-prototype cosine similarity: {mean_inter_sim:.4f}")
+                if mean_inter_sim > 0.95:
+                    print(f"  ⚠ WARNING: Prototypes are nearly identical (sim={mean_inter_sim:.3f}). "
+                          "Consider increasing n_prototypes or checking GMM convergence.")
+            
+            # Check top-k filter overlap
+            all_top_filters = []
+            for result in class_results:
+                all_top_filters.append(set(result['top_filters']))
+            if len(all_top_filters) > 1:
+                common = all_top_filters[0].copy()
+                for s in all_top_filters[1:]:
+                    common &= s
+                if len(common) == top_k:
+                    print(f"  ⚠ WARNING: All {len(all_top_filters)} prototypes share the same "
+                          f"top-{top_k} filters {sorted(common)}. Prototype diversity is low.")
     
     # Compute evaluation metrics
     print("\n" + "="*60)
@@ -419,6 +458,13 @@ def evaluate_variant_c(
     
     # Use the print_evaluation_report function with per-class metrics
     print_evaluation_report(metrics, per_class_metrics={'class_0': metrics_class_0, 'class_1': metrics_class_1})
+
+    # Faithfulness warning for minority class
+    if faithfulness_class_1 < 0.1:
+        print(f"\n⚠ WARNING: NOK (class 1) faithfulness is {faithfulness_class_1:.3f} (< 0.1).")
+        print("  The concept relevance scores may not correlate with causal effects for the")
+        print("  minority class. Consider: (1) more NOK samples, (2) checking intervention")
+        print("  method, or (3) verifying the GMM has converged properly for class 1.")
     
     # Generate visualizations
     print("\n" + "="*60)
@@ -446,7 +492,9 @@ def evaluate_variant_c(
                 composite=composite,
                 output_dir=os.path.join(output_path, 'concept_heatmaps'),
                 top_k=concept_heatmap_top_k,
-                device=device
+                device=device,
+                features=features,
+                labels=labels
             )
             print(f"  Generated {len(concept_heatmap_figs)} concept heatmap figures")
         except Exception as e:

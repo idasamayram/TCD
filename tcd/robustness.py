@@ -535,6 +535,77 @@ def run_robustness_analysis(
     return results
 
 
+def robustness_deviation_analysis(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    prototype_discovery: TemporalPrototypeDiscovery,
+    deviation_threshold: float = 2.0
+) -> Dict[str, Any]:
+    """
+    Deviation-based robustness analysis.
+
+    For each sample, compute its distance to the assigned prototype center.
+    Samples with ||x - μ|| > mean_dist + threshold * std_dist are flagged as unusual.
+
+    Args:
+        features: Tensor of shape (N, n_filters) — CRP filter relevances
+        labels: Tensor of shape (N,) — class labels
+        prototype_discovery: TemporalPrototypeDiscovery with fitted GMMs
+        deviation_threshold: Float; flag samples whose deviation exceeds
+            mean + threshold * std (default 2.0)
+
+    Returns:
+        Dictionary with:
+            'class_statistics': per-class dict with 'pct_flagged'
+            'per_sample_deviations': np.ndarray of deviation magnitudes (N,)
+            'per_sample_assignments': np.ndarray of prototype indices (N,)
+    """
+    features_np = features.cpu().numpy() if isinstance(features, torch.Tensor) else features
+    labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else labels
+
+    n_samples = len(features_np)
+    per_sample_deviations = np.zeros(n_samples)
+    per_sample_assignments = np.zeros(n_samples, dtype=int)
+
+    for i in range(n_samples):
+        label = int(labels_np[i])
+        if label not in prototype_discovery.gmms:
+            continue
+        gmm = prototype_discovery.gmms[label]
+        # Find closest prototype (minimum Euclidean distance to means)
+        dists = np.linalg.norm(features_np[i] - gmm.means_, axis=1)
+        proto_idx = int(np.argmin(dists))
+        per_sample_assignments[i] = proto_idx
+        per_sample_deviations[i] = dists[proto_idx]
+
+    # Compute per-class statistics
+    class_statistics = {}
+    for class_id in np.unique(labels_np):
+        class_id = int(class_id)
+        mask = labels_np == class_id
+        if not mask.any():
+            continue
+        class_devs = per_sample_deviations[mask]
+        mean_dev = float(np.mean(class_devs))
+        std_dev = float(np.std(class_devs))
+        threshold_val = mean_dev + deviation_threshold * std_dev
+        n_flagged = int(np.sum(class_devs > threshold_val))
+        pct_flagged = 100.0 * n_flagged / len(class_devs)
+        class_statistics[class_id] = {
+            'mean_deviation': mean_dev,
+            'std_deviation': std_dev,
+            'threshold': threshold_val,
+            'n_flagged': n_flagged,
+            'pct_flagged': pct_flagged
+        }
+
+    return {
+        'class_statistics': class_statistics,
+        'per_sample_deviations': per_sample_deviations,
+        'per_sample_assignments': per_sample_assignments
+    }
+
+
 def print_robustness_report(results: Dict[str, Any]):
     """
     Print formatted console report of robustness results.

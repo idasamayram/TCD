@@ -838,22 +838,23 @@ def generate_concept_heatmaps(
     composite,
     output_dir: str,
     top_k: int = 5,
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-) -> Dict[Tuple[int, int], plt.Figure]:
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+    features: Optional[torch.Tensor] = None,
+    labels: Optional[torch.Tensor] = None,
+    axes_names: List[str] = ['X', 'Y', 'Z']
+) -> Dict[Tuple[int, int], str]:
     """
     Generate concept conditional heatmaps (attribution graph) for each prototype.
-    
+
     PCX's core visualization adapted for 1D signals. For each prototype:
-    1. Find the closest real sample to the prototype center μ
+    1. Find the closest real sample to the prototype center μ (via Euclidean
+       distance in the pre-computed CRP feature space)
     2. Identify the top-k most important filters (by |μ_k|)
-    3. For each top-k filter, compute conditional CRP heatmap
-    4. Plot raw signal with concept's conditional heatmap overlaid
-    
-    This shows WHEN in the signal each concept activates.
-    
-    Note: Full implementation requires integration with TimeSeriesCondAttribution
-    from tcd.attribution module. See idasamayram/zennit-crp for reference.
-    
+    3. For each top-k filter, compute conditional CRP heatmap using
+       TimeSeriesCondAttribution
+    4. Plot raw signal with concept's conditional heatmap overlaid (bwr cmap,
+       per-axis subplots)
+
     Args:
         model: PyTorch model
         dataset: Dataset to load samples from
@@ -863,84 +864,153 @@ def generate_concept_heatmaps(
         output_dir: Directory to save figures
         top_k: Number of top concepts to visualize per prototype
         device: Device to run on
-        
+        features: Pre-computed CRP feature tensor (N, n_filters); used to find
+            the closest sample to each prototype centroid. When None the
+            function falls back to the first class sample.
+        labels: Class labels tensor (N,) aligned with ``features``.
+        axes_names: Names of the signal channels (default: X, Y, Z)
+
     Returns:
         Dictionary mapping (class_id, proto_idx) -> figure path
     """
     import os
-    
+    from tcd.attribution import TimeSeriesCondAttribution
+
     print("\n" + "="*60)
     print("GENERATING CONCEPT CONDITIONAL HEATMAPS")
     print("="*60)
-    
+
     os.makedirs(output_dir, exist_ok=True)
-    
+
     model.to(device)
     model.eval()
-    
+
+    # Build attributor
+    attributor = TimeSeriesCondAttribution(model)
+
     figures = {}
-    
+
     for class_id in [0, 1]:
         if class_id not in prototype_discovery.gmms:
             continue
-        
+
         class_name = "OK" if class_id == 0 else "NOK"
         print(f"\nClass {class_id} ({class_name}):")
-        
+
         gmm = prototype_discovery.gmms[class_id]
-        
+
+        # Build index mapping: dataset_idx -> feature_row for this class
+        if features is not None and labels is not None:
+            features_np = features.cpu().numpy() if isinstance(features, torch.Tensor) else features
+            labels_np = labels.cpu().numpy() if isinstance(labels, torch.Tensor) else labels
+            class_mask = labels_np == class_id
+            class_feat = features_np[class_mask]
+            class_dataset_indices = np.where(class_mask)[0]
+        else:
+            # Fallback: collect indices from dataset directly
+            class_dataset_indices = np.array([
+                i for i, (_, lbl) in enumerate(dataset) if int(lbl) == class_id
+            ])
+            class_feat = None
+
         for proto_idx in range(prototype_discovery.n_prototypes):
             # Get prototype center μ
             prototype_mean = gmm.means_[proto_idx]
-            
+
             # Find top-k filters by absolute magnitude
             top_filter_indices = np.argsort(np.abs(prototype_mean))[-top_k:][::-1]
-            
+
             print(f"  Prototype {proto_idx}: Top-{top_k} filters = {top_filter_indices.tolist()}")
-            
-            # Find closest sample to this prototype
-            # For simplicity, we'll use the first sample - in a full implementation
-            # we would compute distances to find the actual closest sample
-            
-            # Note: Full implementation would:
-            # 1. Load all samples for this class
-            # 2. Compute their concept relevance vectors
-            # 3. Find the one with minimum Euclidean distance to prototype_mean
-            # 4. Load that sample's raw signal
-            
-            # For now, we'll note this requirement and create a placeholder
-            print(f"    Note: Full implementation requires finding closest sample")
-            print(f"    Would compute conditional CRP for filters: {top_filter_indices.tolist()}")
-            
-            # Placeholder figure
-            fig = plt.figure(figsize=(15, 3 * top_k))
-            fig.suptitle(f'Class {class_id} Prototype {proto_idx} - Concept Conditional Heatmaps', 
-                        fontsize=14)
-            
-            for i, filter_idx in enumerate(top_filter_indices):
-                ax = fig.add_subplot(top_k, 1, i + 1)
-                ax.text(0.5, 0.5, 
-                       f'Concept {filter_idx} conditional heatmap\n(Requires CRP with sample data)',
-                       ha='center', va='center', fontsize=12)
-                ax.set_xlim(0, 1)
-                ax.set_ylim(0, 1)
-                ax.axis('off')
-            
+
+            # --- Find closest sample to prototype centroid ---
+            if class_feat is not None and len(class_feat) > 0:
+                dists = np.linalg.norm(class_feat - prototype_mean[None], axis=1)
+                closest_row = int(np.argmin(dists))
+                closest_dataset_idx = int(class_dataset_indices[closest_row])
+            elif len(class_dataset_indices) > 0:
+                closest_dataset_idx = int(class_dataset_indices[0])
+            else:
+                print(f"    No samples for class {class_id}, skipping")
+                continue
+
+            # Load the actual signal
+            data_p, target = dataset[closest_dataset_idx]
+            data_p = data_p.unsqueeze(0).to(device).requires_grad_(True)
+            target_int = int(target)
+
+            # --- Run conditional CRP per filter ---
+            n_channels = data_p.shape[1]
+            used_axes = axes_names[:n_channels]
+
+            fig, axes = plt.subplots(
+                top_k, n_channels,
+                figsize=(5 * n_channels, 3 * top_k),
+                squeeze=False
+            )
+            fig.suptitle(
+                f'Class {class_id} ({class_name}) Prototype {proto_idx} — Conditional CRP Heatmaps',
+                fontsize=13
+            )
+
+            signal_np = data_p.detach().cpu().numpy()[0]  # (C, T)
+            n_timesteps = signal_np.shape[1]
+            t = np.arange(n_timesteps)
+
+            for row, filter_idx in enumerate(top_filter_indices):
+                # Conditional CRP: condition on class AND specific filter
+                conditions = [{"y": target_int, layer_name: int(filter_idx)}]
+                try:
+                    cond_heatmap, _, _, _ = attributor(
+                        data_p, conditions, composite, record_layer=[]
+                    )
+                    # cond_heatmap shape: (1, C, T)
+                    heat_np = cond_heatmap.detach().cpu().numpy()[0]  # (C, T)
+                except Exception as exc:
+                    print(f"    Warning: CRP failed for filter {filter_idx}: {exc}")
+                    heat_np = np.zeros_like(signal_np)
+
+                # Normalize heatmap for colormap
+                abs_max = np.abs(heat_np).max()
+                if abs_max < 1e-12:
+                    abs_max = 1.0
+                heat_norm = heat_np / abs_max  # in [-1, 1]
+
+                cmap = plt.get_cmap('bwr')
+                norm = Normalize(vmin=-1, vmax=1)
+
+                for col, ch_name in enumerate(used_axes):
+                    ax = axes[row][col]
+                    ch_heat = heat_norm[col] if col < heat_norm.shape[0] else heat_norm[0]
+                    ch_sig = signal_np[col] if col < signal_np.shape[0] else signal_np[0]
+
+                    # Color background segments by heatmap value
+                    for ti in range(n_timesteps - 1):
+                        color = cmap(norm(float(ch_heat[ti])))
+                        ax.axvspan(t[ti], t[ti + 1], color=color, alpha=0.4, linewidth=0)
+
+                    # Signal as black line on top
+                    ax.plot(t, ch_sig, color='black', linewidth=0.6)
+
+                    ax.set_xlim(0, n_timesteps - 1)
+                    if row == 0:
+                        ax.set_title(f'Axis {ch_name}', fontsize=10)
+                    if col == 0:
+                        ax.set_ylabel(f'Filter {filter_idx}', fontsize=9)
+                    ax.tick_params(labelsize=7)
+
             plt.tight_layout()
-            
-            # Save figure
-            fig_path = os.path.join(output_dir, 
-                                   f'concept_heatmaps_class_{class_id}_proto_{proto_idx}.png')
+
+            fig_path = os.path.join(
+                output_dir,
+                f'concept_heatmaps_class_{class_id}_proto_{proto_idx}.png'
+            )
             fig.savefig(fig_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
-            
+
             figures[(class_id, proto_idx)] = fig_path
-            print(f"    Saved placeholder to {fig_path}")
-    
+            print(f"    Saved to {fig_path}")
+
     print(f"\n✓ Generated {len(figures)} concept heatmap figures")
-    print(f"  Note: Full implementation requires integration with CRP attributor")
-    print(f"  See idasamayram/zennit-crp/tutorials/cnn1d_attribution.py for pattern")
-    
     return figures
 
 

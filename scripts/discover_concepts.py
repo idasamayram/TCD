@@ -392,19 +392,24 @@ def run_variant_c(
     print(f"  max_iter: {config['tcd'].get('gmm_max_iter', 200)}")
     tcd.fit(features, labels, outputs, class_weights=class_weights)
     
-    # Step 3: Global window analysis
+    # Step 3: Global window analysis (optional — disabled by default for Variant C)
     print("\n" + "="*80)
     print("Step 3: Window Analysis")
     print("="*80)
-    
+
     global_windows = None
     window_analysis_results = None
-    
-    if heatmaps is not None:
+
+    iw_config = config['tcd'].get('important_windows', {})
+    window_analysis_enabled = iw_config.get('enabled', False)
+
+    if not window_analysis_enabled:
+        print("\nWindow analysis disabled (tcd.important_windows.enabled: false).")
+        print("Skipping Step 3.")
+    elif heatmaps is not None:
         from tcd.variants.global_concepts import GlobalWindowAnalysis
         
         gw_config = config['tcd'].get('global_windows', {})
-        iw_config = config['tcd'].get('important_windows', {})
         
         analyzer = GlobalWindowAnalysis(
             window_size=gw_config.get('window_size', 40),
@@ -452,7 +457,11 @@ def run_variant_c(
                 
                 for feat_name, test in window_analysis_results['statistical_tests'].items():
                     sig_str = "Yes" if test['significant'] else "No"
-                    print(f"{feat_name:<25} {test['p_value']:<12.6f} {test['cohens_d']:<12.3f} {sig_str:<12}")
+                    p_val = test['p_value']
+                    cohens_d = test['cohens_d']
+                    p_str = f"{p_val:<12.6f}" if not np.isnan(p_val) else f"{'nan':<12}"
+                    d_str = f"{cohens_d:<12.3f}" if not np.isnan(cohens_d) else f"{'nan':<12}"
+                    print(f"{feat_name:<25} {p_str} {d_str} {sig_str:<12}")
         else:
             # Use original global averaging method
             print(f"\nUsing global averaging method...")
