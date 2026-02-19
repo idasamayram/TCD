@@ -386,7 +386,9 @@ def evaluate_variant_c(
     # Compute evaluation metrics
     print("\n" + "="*60)
     
-    from tcd.evaluation import compute_faithfulness, compute_stability, compute_concept_purity, compute_prototype_coverage
+    from tcd.evaluation import (compute_faithfulness, compute_stability, compute_concept_purity,
+                             compute_prototype_coverage, compute_faithfulness_prototype_level,
+                             compute_incremental_faithfulness)
     
     # Get relevance scores (mean of features)
     relevance_scores = features.abs().mean(dim=0).numpy()
@@ -412,7 +414,8 @@ def evaluate_variant_c(
     # Prototype coverage for class 0
     if len(class_0_features) > 0:
         assignments_class_0 = tcd.assign_prototype(class_0_features, class_id=0)
-        coverage_metrics_class_0 = compute_prototype_coverage(assignments_class_0, tcd.n_prototypes)
+        n_proto_0 = tcd.prototype_discovery.gmms[0].n_components
+        coverage_metrics_class_0 = compute_prototype_coverage(assignments_class_0, n_proto_0)
     else:
         coverage_metrics_class_0 = {'coverage': 0, 'balance': 0, 'max_coverage': 0}
     
@@ -425,7 +428,8 @@ def evaluate_variant_c(
         
         # Prototype coverage for class 1
         assignments_class_1 = tcd.assign_prototype(class_1_features, class_id=1)
-        coverage_metrics_class_1 = compute_prototype_coverage(assignments_class_1, tcd.n_prototypes)
+        n_proto_1 = tcd.prototype_discovery.gmms[1].n_components
+        coverage_metrics_class_1 = compute_prototype_coverage(assignments_class_1, n_proto_1)
     else:
         faithfulness_class_1 = 0.0
         stability_class_1 = 0.0
@@ -465,6 +469,87 @@ def evaluate_variant_c(
         print("  The concept relevance scores may not correlate with causal effects for the")
         print("  minority class. Consider: (1) more NOK samples, (2) checking intervention")
         print("  method, or (3) verifying the GMM has converged properly for class 1.")
+    
+    # Prototype-level faithfulness
+    faithfulness_proto = None
+    if proto_results is not None:
+        print("\n" + "="*60)
+        print("PROTOTYPE-LEVEL FAITHFULNESS")
+        print("="*60)
+        top_k = config.get('evaluation', {}).get('prototype_top_k', 5)
+        faithfulness_proto = compute_faithfulness_prototype_level(
+            proto_results=proto_results,
+            prototype_discovery=tcd.prototype_discovery,
+            importance_scores_per_class={0: importance_scores_class_0, 1: importance_scores_class_1},
+            top_k=top_k
+        )
+        print(f"\nPrototype-level Spearman faithfulness (top-{top_k} filters per prototype):")
+        for class_id, class_mean in faithfulness_proto['per_class'].items():
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"  Class {class_id} ({class_name}): {class_mean:.3f}")
+            for proto_idx, corr in faithfulness_proto['per_prototype'].get(class_id, {}).items():
+                print(f"    Prototype {proto_idx}: {corr:.3f}")
+        print(f"  Overall mean: {faithfulness_proto['mean']:.3f}")
+    
+    # PCX-style incremental faithfulness with AUC
+    incremental_faithfulness_results = {}
+    inc_faith_config = config.get('evaluation', {}).get('incremental_faithfulness', {})
+    if inc_faith_config.get('enabled', True):
+        print("\n" + "="*60)
+        print("INCREMENTAL FAITHFULNESS (PCX-style AUC)")
+        print("="*60)
+        inc_n_samples = inc_faith_config.get('n_samples', 100)
+        inc_n_steps = inc_faith_config.get('n_steps', 30)
+        
+        for target_cls in [0, 1]:
+            class_name = "OK" if target_cls == 0 else "NOK"
+            # Use per-class relevance vectors (convert to numpy if needed)
+            labels_np = labels.numpy() if hasattr(labels, 'numpy') else np.asarray(labels)
+            features_np = features.numpy() if hasattr(features, 'numpy') else np.asarray(features)
+            cls_mask = labels_np == target_cls
+            cls_relevance = features_np[cls_mask]
+            
+            if cls_relevance.shape[0] == 0:
+                print(f"  Class {target_cls} ({class_name}): no samples, skipping")
+                continue
+            
+            try:
+                result = compute_incremental_faithfulness(
+                    model=model,
+                    dataset=dataset,
+                    layer_name=layer_name,
+                    concept_relevance_vectors=cls_relevance,
+                    n_samples=inc_n_samples,
+                    n_steps=inc_n_steps,
+                    target_class=target_cls,
+                    batch_size=config['analysis']['batch_size'],
+                    device=device
+                )
+                incremental_faithfulness_results[target_cls] = result
+                print(f"\n  Class {target_cls} ({class_name}):")
+                print(f"    AUC: {result['auc']:.4f}")
+                print(f"    Samples used: {result['n_samples_used']}")
+                print(f"    Steps: {result['steps'][:5]}... (showing first 5)")
+                
+                # Save incremental faithfulness plot
+                try:
+                    import matplotlib.pyplot as plt
+                    os.makedirs(output_path, exist_ok=True)
+                    fig, ax = plt.subplots(figsize=(8, 5))
+                    ax.plot(result['steps'], result['mean_logit_changes'], marker='o', linewidth=2)
+                    ax.set_xlabel('Number of suppressed concepts (sorted by relevance)')
+                    ax.set_ylabel('Mean logit change')
+                    ax.set_title(f'Incremental Faithfulness — {class_name} (Class {target_cls})\nAUC={result["auc"]:.4f}')
+                    ax.grid(True, alpha=0.3)
+                    plot_path = os.path.join(output_path, f'incremental_faithfulness_class_{target_cls}.png')
+                    fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+                    plt.close(fig)
+                    print(f"    Plot saved to {plot_path}")
+                except Exception as plot_err:
+                    print(f"    Warning: could not save plot: {plot_err}")
+            except Exception as e:
+                print(f"  Class {target_cls} ({class_name}): error — {e}")
+                traceback.print_exc()
     
     # Generate visualizations
     print("\n" + "="*60)
@@ -511,7 +596,9 @@ def evaluate_variant_c(
         'importance_scores_class_1': importance_scores_class_1,
         'metrics_class_0': metrics_class_0,
         'metrics_class_1': metrics_class_1,
-        'prototype_intervention': proto_results
+        'prototype_intervention': proto_results,
+        'faithfulness_prototype_level': faithfulness_proto,
+        'incremental_faithfulness': incremental_faithfulness_results
     }
 
 

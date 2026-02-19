@@ -225,7 +225,7 @@ def prototype_intervention_analysis(
         
         class_results = []
         
-        for proto_idx in range(prototype_discovery.n_prototypes):
+        for proto_idx in range(gmm.n_components):
             # Get prototype center μ
             prototype_mean = gmm.means_[proto_idx]  # shape: (n_concepts,)
             

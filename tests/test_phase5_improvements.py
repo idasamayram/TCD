@@ -314,10 +314,10 @@ def test_prototype_discovery_optimal_n_selection():
     cluster3 = torch.randn(30, 16) + torch.tensor([1.0] * 16)
     features = torch.cat([cluster1, cluster2, cluster3])
     
-    # Test optimal n selection
+    # Test optimal n selection with min_prototypes=1 (new default)
     optimal_n, scores = TemporalPrototypeDiscovery.select_optimal_n_prototypes(
         features,
-        min_prototypes=2,
+        min_prototypes=1,
         max_prototypes=5,
         covariance_type='diag',
         n_init=3,
@@ -327,9 +327,9 @@ def test_prototype_discovery_optimal_n_selection():
     
     # Should return valid n and scores
     assert isinstance(optimal_n, int), "optimal_n should be int"
-    assert 2 <= optimal_n <= 5, "optimal_n should be in valid range"
+    assert 1 <= optimal_n <= 5, "optimal_n should be in valid range [1, 5]"
     assert isinstance(scores, dict), "scores should be dict"
-    assert len(scores) == 4, "Should have scores for 2, 3, 4, 5"
+    assert len(scores) == 5, "Should have scores for 1, 2, 3, 4, 5"
     
     # Scores should all be finite
     for n, score in scores.items():
@@ -340,7 +340,10 @@ def test_prototype_discovery_optimal_n_selection():
     assert scores[optimal_n] == min(scores.values()), \
         "Optimal n should have lowest BIC score"
     
-    print(f"✓ Optimal n selection test passed (selected n={optimal_n})")
+    # Verify that n=1 is a valid candidate (min_prototypes=1)
+    assert 1 in scores, "Scores should include n=1 when min_prototypes=1"
+    
+    print(f"✓ Optimal n selection test passed (selected n={optimal_n}, range 1-5)")
 
 
 def test_prototype_discovery_with_improved_defaults():

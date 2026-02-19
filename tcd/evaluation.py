@@ -39,6 +39,228 @@ def compute_faithfulness(
     return corr
 
 
+def compute_faithfulness_prototype_level(
+    proto_results: Dict,
+    prototype_discovery,
+    importance_scores_per_class: Optional[Dict[int, np.ndarray]] = None,
+    top_k: int = 5
+) -> Dict:
+    """
+    Compute prototype-level faithfulness metric.
+
+    Instead of correlating relevance vs intervention effect across ALL filters,
+    this function focuses on only the top-K most important filters for each
+    prototype (identified from the GMM mean). This gives a more meaningful
+    faithfulness score for prototypes that rely on a small subset of filters.
+
+    For each prototype:
+    1. Take the top-K filters by absolute magnitude from the prototype's GMM mean
+    2. For those K filters, compute Spearman correlation between:
+       - Relevance: the absolute GMM mean values at those K positions
+       - Intervention effect: the per-filter importance scores at those K positions
+         (from ``importance_scores_per_class``), or if not provided, the GMM mean
+         magnitudes are used as a self-consistency check.
+    3. Average correlations across all prototypes per class, then across classes.
+
+    Args:
+        proto_results: Dictionary from ``prototype_intervention_analysis()``
+            mapping class_id -> list of prototype result dicts.  Each result dict
+            must contain ``'prototype_idx'``.
+        prototype_discovery: A fitted ``TemporalPrototypeDiscovery`` instance
+            whose ``gmms`` attribute is used to look up the prototype means.
+        importance_scores_per_class: Optional dict mapping class_id ->
+            per-filter importance scores array of shape ``(n_concepts,)``.
+            When provided, the Spearman correlation is computed between the GMM
+            mean magnitudes (relevance proxy) and these intervention effects for
+            the top-K filters.  When ``None``, the function falls back to using
+            the GMM mean magnitudes for both (measuring internal prototype
+            structure consistency).
+        top_k: Number of top filters to consider per prototype.
+
+    Returns:
+        Dictionary with keys:
+        - ``'per_prototype'``: {class_id: {proto_idx: spearman_r}}
+        - ``'per_class'``: {class_id: mean_spearman_r}
+        - ``'mean'``: overall mean spearman_r across all prototypes
+    """
+    per_prototype: Dict[int, Dict[int, float]] = {}
+    per_class: Dict[int, float] = {}
+    all_corrs: List[float] = []
+
+    # Normalize importance_scores_per_class keys to int once at entry
+    if importance_scores_per_class is not None:
+        importance_scores_per_class = {int(k): v for k, v in importance_scores_per_class.items()}
+
+    for class_id, class_results in proto_results.items():
+        class_id = int(class_id)
+        if class_id not in prototype_discovery.gmms:
+            continue
+
+        gmm = prototype_discovery.gmms[class_id]
+        class_corrs: List[float] = []
+        per_prototype[class_id] = {}
+
+        # Per-filter importance scores for this class (if available)
+        class_importance = None
+        if importance_scores_per_class is not None:
+            class_importance = importance_scores_per_class.get(class_id)
+
+        for result in class_results:
+            proto_idx = result['prototype_idx']
+            prototype_mean = gmm.means_[proto_idx]  # shape: (n_concepts,)
+
+            # Top-K filter indices by absolute magnitude of the prototype mean
+            top_filter_indices = np.argsort(np.abs(prototype_mean))[-top_k:]
+
+            # Relevance scores for those filters (absolute prototype mean values)
+            relevance_topk = np.abs(prototype_mean[top_filter_indices])
+
+            # Intervention effects: per-filter importance scores if provided,
+            # else fall back to prototype mean magnitudes
+            if class_importance is not None:
+                intervention_topk = np.abs(class_importance[top_filter_indices])
+            else:
+                intervention_topk = relevance_topk.copy()
+
+            # Only compute correlation if we have enough distinct points
+            if len(top_filter_indices) >= 3:
+                corr, _ = spearmanr(relevance_topk, intervention_topk)
+                if np.isnan(corr):
+                    corr = 0.0
+            else:
+                corr = 0.0
+
+            per_prototype[class_id][proto_idx] = float(corr)
+            class_corrs.append(corr)
+            all_corrs.append(corr)
+
+        per_class[class_id] = float(np.mean(class_corrs)) if class_corrs else 0.0
+
+    mean_corr = float(np.mean(all_corrs)) if all_corrs else 0.0
+
+    return {
+        'per_prototype': per_prototype,
+        'per_class': per_class,
+        'mean': mean_corr
+    }
+
+
+def compute_incremental_faithfulness(
+    model,
+    dataset,
+    layer_name: str,
+    concept_relevance_vectors: np.ndarray,
+    n_samples: int = 100,
+    n_steps: Optional[int] = None,
+    target_class: int = 0,
+    batch_size: int = 32,
+    device: str = 'cpu'
+) -> Dict:
+    """
+    PCX-style incremental faithfulness with AUC.
+
+    Adapted from PCX ``experiments/faithfulness/faithfulness.py`` (lines 161-189)
+    for 1D time-series.  Concepts (filters) are sorted by their mean relevance
+    across the provided samples and suppressed one-by-one from most to least
+    relevant.  At each step the mean logit change vs. the baseline is recorded.
+    The Area Under the Curve (AUC) via ``np.trapz`` is the summary statistic —
+    higher AUC means suppressing the most-relevant concepts causes larger logit
+    changes, indicating the concepts are more faithful.
+
+    Args:
+        model: PyTorch model (already on the correct device).
+        dataset: Dataset used to draw samples from ``target_class``.
+        layer_name: Name of the layer to intervene on.
+        concept_relevance_vectors: Array of shape ``(n_samples, n_concepts)``
+            containing concept relevance vectors for ``target_class`` samples.
+        n_samples: Maximum number of samples to use for the measurement.
+        n_steps: Number of suppression steps (defaults to n_concepts).
+        target_class: Class whose logit is monitored.
+        batch_size: Batch size for forward passes.
+        device: Torch device string.
+
+    Returns:
+        Dictionary with keys:
+        - ``'auc'``: scalar AUC value (higher = more faithful)
+        - ``'steps'``: list of k values (x-axis)
+        - ``'mean_logit_changes'``: list of mean logit changes at each step
+        - ``'n_samples_used'``: actual number of samples used
+    """
+    from torch.utils.data import DataLoader, Subset
+    from tcd.intervention import ConceptInterventionHook
+
+    model.eval()
+    torch_device = torch.device(device)
+    model.to(torch_device)
+
+    # Normalize relevance vectors to always be 2D: (n_samples, n_concepts)
+    concept_relevance_vectors = np.atleast_2d(concept_relevance_vectors)
+    n_concepts = concept_relevance_vectors.shape[1]
+    mean_relevance = np.abs(concept_relevance_vectors).mean(axis=0)
+
+    # Sort concepts by mean absolute relevance (most relevant first)
+    sorted_concept_indices = np.argsort(mean_relevance)[::-1]
+
+    # Collect target-class sample indices
+    class_indices = [i for i, (_, lbl) in enumerate(dataset) if lbl == target_class]
+    class_indices = class_indices[:n_samples]
+    if len(class_indices) == 0:
+        return {'auc': 0.0, 'steps': [], 'mean_logit_changes': [], 'n_samples_used': 0}
+
+    subset = Subset(dataset, class_indices)
+    loader = DataLoader(subset, batch_size=batch_size, shuffle=False)
+
+    # Collect all data and compute baseline logits
+    all_data: List[torch.Tensor] = []
+    for batch_x, _ in loader:
+        all_data.append(batch_x)
+    all_data_tensor = torch.cat(all_data).to(torch_device)
+
+    with torch.no_grad():
+        baseline_output = model(all_data_tensor)
+    baseline_logits = baseline_output[:, target_class].cpu().numpy()  # (N,)
+
+    # Find target layer module
+    target_module = None
+    for name, module in model.named_modules():
+        if name == layer_name:
+            target_module = module
+            break
+    if target_module is None:
+        raise ValueError(f"Layer '{layer_name}' not found in model")
+
+    if n_steps is None:
+        n_steps = n_concepts
+
+    steps = list(range(1, min(n_steps, n_concepts) + 1))
+    mean_logit_changes: List[float] = []
+
+    for k in steps:
+        # Suppress the top-k most relevant concepts
+        suppressed_indices = sorted_concept_indices[:k].tolist()
+        hook = ConceptInterventionHook(method='suppress', concept_indices=suppressed_indices)
+        handle = target_module.register_forward_hook(hook)
+
+        with torch.no_grad():
+            intervened_output = model(all_data_tensor)
+        handle.remove()
+
+        intervened_logits = intervened_output[:, target_class].cpu().numpy()
+        logit_change = np.abs(baseline_logits - intervened_logits).mean()
+        mean_logit_changes.append(float(logit_change))
+
+    # Compute AUC via trapezoidal rule
+    auc = float(np.trapz(mean_logit_changes, x=steps)) if len(steps) > 1 else 0.0
+
+    return {
+        'auc': auc,
+        'steps': steps,
+        'mean_logit_changes': mean_logit_changes,
+        'n_samples_used': len(class_indices)
+    }
+
+
+
 def compute_stability(
     concept_vectors: np.ndarray,
     labels: np.ndarray,

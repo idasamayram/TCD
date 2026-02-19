@@ -11,7 +11,9 @@ from .intervention import (
     measure_concept_importance,
     prototype_intervention_analysis
 )
-from .evaluation import evaluate_concept_quality, compute_faithfulness, compute_stability, compute_concept_purity
+from .evaluation import (evaluate_concept_quality, compute_faithfulness, compute_stability,
+                         compute_concept_purity, compute_faithfulness_prototype_level,
+                         compute_incremental_faithfulness)
 from .visualization import (
     plot_ts_heatmap, 
     plot_concept_relevance, 
@@ -64,6 +66,8 @@ __all__ = [
     'compute_faithfulness',
     'compute_stability',
     'compute_concept_purity',
+    'compute_faithfulness_prototype_level',
+    'compute_incremental_faithfulness',
     
     # Visualization
     'plot_ts_heatmap',

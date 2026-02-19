@@ -130,6 +130,10 @@ evaluation:
   concept_heatmap_top_k: 5  # Number of top concepts to visualize
   robustness_analysis: false  # Enable deviation-based robustness analysis
   deviation_threshold: 2.0  # Flag samples with ||Δ|| > mean + threshold*std
+  incremental_faithfulness:
+    enabled: true  # Compute PCX-style incremental faithfulness with AUC
+    n_samples: 100  # Number of samples per class for the AUC measurement
+    n_steps: 30  # Number of incremental suppression steps
 
 robustness:
   n_samples: 100          # Number of samples to test

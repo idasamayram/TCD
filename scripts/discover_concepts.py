@@ -364,11 +364,10 @@ def run_variant_c(
             print(f"  BIC scores: {scores}")
             print(f"  Selected: n_prototypes={optimal_n}")
         
-        # Use the average (rounded) for simplicity across both classes
-        n_prototypes = int(np.mean(list(optimal_n_dict.values())))
+        # Use per-class n_prototypes directly instead of averaging
+        n_prototypes = optimal_n_dict
         print(f"\n{'='*60}")
-        print(f"BIC-optimal prototypes: {n_prototypes} (averaged across classes)")
-        print(f"  Per-class optimal: OK={optimal_n_dict.get(0, 'N/A')}, NOK={optimal_n_dict.get(1, 'N/A')}")
+        print(f"BIC-optimal prototypes (per class): OK={optimal_n_dict.get(0, 'N/A')}, NOK={optimal_n_dict.get(1, 'N/A')}")
         print(f"  If BIC says 1 per class, that's valid - means one strategy per class")
         print(f"{'='*60}")
     else:
@@ -386,7 +385,9 @@ def run_variant_c(
     )
     
     # Fit GMM prototypes
-    print(f"\nFitting {n_prototypes} prototypes per class with improved convergence settings...")
+    proto_desc = (f"per-class ({', '.join(f'class {k}: {v}' for k, v in n_prototypes.items())})"
+                  if isinstance(n_prototypes, dict) else f"{n_prototypes} per class")
+    print(f"\nFitting {proto_desc} prototypes with improved convergence settings...")
     print(f"  Covariance type: {config['tcd'].get('gmm_covariance', 'diag')}")
     print(f"  n_init: {config['tcd'].get('gmm_n_init', 5)}")
     print(f"  max_iter: {config['tcd'].get('gmm_max_iter', 200)}")
