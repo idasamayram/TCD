@@ -27,13 +27,13 @@ tcd:
   
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
   n_prototypes: 4  # Number of prototypes per class (or use use_bic_selection)
-  use_bic_selection: false  # If true, use BIC to select optimal n_prototypes
+  use_bic_selection: true  # If true, use BIC to select optimal n_prototypes
   bic_range: [1, 2, 3, 4, 5, 6]  # Range to search for optimal n_prototypes
   top_k_samples: 6  # Top-k samples per prototype for visualization
   gmm_covariance: "diag"  # Better for high-dimensional (64+ dims): 'diag', 'full', 'tied', 'spherical'
   gmm_n_init: 5  # Number of GMM initializations (increased from 1 for better convergence)
   gmm_max_iter: 200  # Maximum GMM iterations (increased from 10 for 64-dim convergence)
-  balance_method: "downsample"  # Method for handling class imbalance: 'downsample' (default) or 'oversample'
+  balance_method: none  # Method for handling class imbalance: 'downsample' (default) or 'oversample'
   
   # Global window analysis (for interpretation)
   global_windows:
@@ -120,7 +120,7 @@ tcd:
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space
+  target_layer: "conv4"  # Use conv3 (64 filters) for richer concept space, or conv4 (128 filters) for more direct output impact
   concept_indices: []  # leave empty to auto-select
 
 evaluation:
