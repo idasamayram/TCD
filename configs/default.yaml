@@ -127,7 +127,7 @@ evaluation:
   prototype_top_k: 5  # Number of top filters to suppress per prototype
   concept_heatmaps: true  # Generate conditional CRP heatmaps
   concept_heatmap_top_k: 5  # Number of top concepts to visualize
-  robustness_analysis: true  # Enable deviation-based robustness analysis
+  robustness_analysis: false  # Enable deviation-based robustness analysis
   deviation_threshold: 2.0  # Flag samples with ||Δ|| > mean + threshold*std
 
 robustness:
