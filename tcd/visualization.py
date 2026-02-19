@@ -970,7 +970,9 @@ def generate_concept_heatmaps(
                     heat_np = np.zeros_like(signal_np)
 
                 # Normalize heatmap for colormap
-                abs_max = np.abs(heat_np).max()
+
+                # abs_max = np.abs(heat_np).max()   # 99 percentile is more robust to outliers and more visually informative than absolute max
+                abs_max = np.percentile(np.abs(heat_np), 99)
                 if abs_max < 1e-12:
                     abs_max = 1.0
                 heat_norm = heat_np / abs_max  # in [-1, 1]
@@ -986,7 +988,7 @@ def generate_concept_heatmaps(
                     # Color background segments by heatmap value
                     for ti in range(n_timesteps - 1):
                         color = cmap(norm(float(ch_heat[ti])))
-                        ax.axvspan(t[ti], t[ti + 1], color=color, alpha=0.4, linewidth=0)
+                        ax.axvspan(t[ti], t[ti + 1], color=color, alpha=0.5, linewidth=0)
 
                     # Signal as black line on top
                     ax.plot(t, ch_sig, color='black', linewidth=0.6)
