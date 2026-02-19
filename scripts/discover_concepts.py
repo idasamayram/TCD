@@ -947,8 +947,8 @@ def main():
                        help='Path to CRP features directory from run_analysis.py')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for concept results')
-    parser.add_argument('--layer', type=str, default='conv3',
-                       help='Layer to use for Variant C (default: conv3)')
+    parser.add_argument('--layer', type=str, default='conv4',
+                       help='Layer to use for Variant C (default: conv4)')
     parser.add_argument('--window-based', action='store_true',
                        help='Use window-based concept discovery for Variant A (default: filterbank)')
     parser.add_argument('--data', type=str, default=None,
