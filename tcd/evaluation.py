@@ -153,7 +153,9 @@ def compute_incremental_faithfulness(
         labels: np.ndarray,
         n_steps: int = 30,
         batch_size: int = 32,
-        device: str = 'cuda'
+        device: str = 'cuda',
+        n_samples: Optional[int] = None,
+        target_class: Optional[int] = None
 ) -> dict:
     """
     PCX-style incremental faithfulness (perturbation AUC).
@@ -170,23 +172,55 @@ def compute_incremental_faithfulness(
         model: The CNN model
         dataset: Dataset with (signal, label) pairs
         layer_name: Layer to intervene on (e.g. 'conv3')
-        concept_relevances: Per-sample concept vectors, shape (N, n_filters)
+        concept_relevance_vectors: Per-sample concept vectors, shape (N, n_filters)
                            These should be abs_norm=True normalized CRVs
         labels: True labels, shape (N,)
         n_steps: Number of suppression steps
         batch_size: Batch size for forward passes
         device: Device string
+        n_samples: If provided and less than len(dataset), subsample dataset to
+                   this many samples.
+        target_class: If provided, only use samples of this class (filters both
+                      ``labels`` and ``dataset`` accordingly).
 
     Returns:
         dict with 'auc_relevance', 'auc_random', 'auc_ratio',
-        'perturbation_curve_relevance', 'perturbation_curve_random', 'steps'
+        'perturbation_curve_relevance', 'perturbation_curve_random', 'steps'.
+        Also includes alias keys for caller compatibility:
+        'auc' (== 'auc_relevance'), 'n_samples_used', 'mean_logit_changes'
+        (== 'perturbation_curve_relevance').
     """
     from torch.utils.data import DataLoader, Subset
 
     model.to(device)
     model.eval()
 
-    n_samples = len(dataset)
+    # Convert labels to numpy for masking
+    if hasattr(labels, 'numpy'):
+        labels_np = labels.numpy()
+    else:
+        labels_np = np.asarray(labels)
+
+    # Filter by target_class if specified
+    if target_class is not None:
+        class_mask = labels_np == target_class
+        class_indices = np.where(class_mask)[0]
+        concept_relevance_vectors = concept_relevance_vectors[class_mask]
+        dataset = Subset(dataset, class_indices.tolist())
+
+    # Subsample if n_samples specified and less than current dataset size
+    total_available = len(dataset)
+    if n_samples is not None and n_samples < total_available:
+        rng_sub = np.random.RandomState(0)
+        chosen = rng_sub.choice(total_available, size=n_samples, replace=False)
+        chosen = np.sort(chosen)
+        concept_relevance_vectors = concept_relevance_vectors[chosen]
+        if isinstance(dataset, Subset):
+            dataset = Subset(dataset.dataset, [dataset.indices[i] for i in chosen])
+        else:
+            dataset = Subset(dataset, chosen.tolist())
+
+    n_samples_used = len(dataset)
     n_concepts = concept_relevance_vectors.shape[1]
 
     # Determine step sizes
@@ -200,7 +234,7 @@ def compute_incremental_faithfulness(
 
     # Random baseline order
     rng = np.random.RandomState(42)
-    random_order = np.array([rng.permutation(n_concepts) for _ in range(n_samples)])
+    random_order = np.array([rng.permutation(n_concepts) for _ in range(n_samples_used)])
 
     results = {'relevance': [], 'random': []}
 
@@ -250,8 +284,8 @@ def compute_incremental_faithfulness(
 
                 # Logit change for target class (per-sample)
                 for i in range(bs):
-                    target_class = int(batch_labels[i])
-                    change = (masked_out[i, target_class] - original_out[i, target_class]).item()
+                    sample_class = int(batch_labels[i])
+                    change = (masked_out[i, sample_class] - original_out[i, sample_class]).item()
                     total_change += change
                     count += 1
 
@@ -264,8 +298,9 @@ def compute_incremental_faithfulness(
 
     # Compute AUC (normalize steps to [0, 1])
     normalized_steps = steps / total_concepts
-    auc_relevance = np.trapz(results['relevance'], normalized_steps)
-    auc_random = np.trapz(results['random'], normalized_steps)
+    _trapz = getattr(np, 'trapezoid', None) or getattr(np, 'trapz')
+    auc_relevance = _trapz(results['relevance'], normalized_steps)
+    auc_random = _trapz(results['random'], normalized_steps)
 
     return {
         'auc_relevance': float(auc_relevance),
@@ -273,7 +308,11 @@ def compute_incremental_faithfulness(
         'auc_ratio': float(auc_relevance / auc_random) if auc_random != 0 else float('inf'),
         'perturbation_curve_relevance': results['relevance'].tolist(),
         'perturbation_curve_random': results['random'].tolist(),
-        'steps': steps.tolist()
+        'steps': steps.tolist(),
+        # Alias keys for caller compatibility
+        'auc': float(auc_relevance),
+        'n_samples_used': n_samples_used,
+        'mean_logit_changes': results['relevance'].tolist(),
     }
 
 

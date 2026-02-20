@@ -1016,6 +1016,153 @@ def generate_concept_heatmaps(
     return figures
 
 
+def plot_pcx_prototype_concept_grid(
+    model,
+    dataset,
+    prototype_idx: int,
+    proto_mean: np.ndarray,
+    closest_sample_signal: np.ndarray,
+    closest_sample_heatmap: np.ndarray,
+    layer_name: str,
+    composite,
+    top_k: int = 5,
+    class_id: int = 0,
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+    axes_names: List[str] = ['X', 'Y', 'Z'],
+    figsize: Optional[Tuple[int, int]] = None,
+    alpha: float = 0.5,
+    cmap: str = 'bwr'
+) -> plt.Figure:
+    """
+    PCX Figure 2-style combined prototype + concept grid for 1D vibration signals.
+
+    Layout (adapted from PCX paper for 1D signals):
+    - Left large panel: representative signal for the closest sample to the
+      prototype, with the full CRP heatmap overlay.
+    - Right panels (one per top-k concept/filter): same signal but showing
+      ONLY that concept's conditional CRP heatmap.
+    - Bottom bar chart: prototype filter-magnitude vector (μ), highlighting
+      the top-k concepts.
+
+    Args:
+        model: PyTorch model.
+        dataset: Dataset to load samples from.
+        prototype_idx: Index of this prototype within the class GMM.
+        proto_mean: GMM mean vector for this prototype, shape ``(n_filters,)``.
+        closest_sample_signal: Raw signal array ``(C, T)`` for the closest sample.
+        closest_sample_heatmap: Full CRP heatmap ``(C, T)`` for the closest sample.
+        layer_name: Layer name to condition CRP on (e.g. ``'conv3'``).
+        composite: Zennit composite for CRP attribution.
+        top_k: Number of top concepts to show in the right panels.
+        class_id: Class ID (0=OK, 1=NOK) used for the ``y`` condition.
+        device: Device string.
+        axes_names: Channel axis names.
+        figsize: Figure size; auto-computed when ``None``.
+        alpha: Heatmap overlay transparency.
+        cmap: Colormap for heatmap overlay.
+
+    Returns:
+        Matplotlib figure.
+    """
+    from tcd.attribution import TimeSeriesCondAttribution
+
+    n_channels = closest_sample_signal.shape[0]
+    n_timesteps = closest_sample_signal.shape[1]
+    t = np.arange(n_timesteps)
+
+    # Top-k filter indices by absolute proto_mean magnitude
+    top_filter_indices = np.argsort(np.abs(proto_mean))[-top_k:][::-1]
+
+    used_axes = (axes_names[:n_channels] if len(axes_names) >= n_channels
+                 else [f'Ch{c}' for c in range(n_channels)])
+
+    # --- Layout ---
+    # Rows: n_channels (one per signal axis)
+    # Columns: 1 (full heatmap) + top_k (per-concept heatmaps)
+    # Plus an extra row at the bottom for the bar chart
+    n_cols = 1 + top_k
+    n_rows = n_channels + 1  # +1 for bar chart
+
+    if figsize is None:
+        figsize = (3 * n_cols + 2, 3 * n_channels + 2)
+
+    fig = plt.figure(figsize=figsize)
+    class_name = "OK" if class_id == 0 else "NOK"
+    fig.suptitle(
+        f'{class_name} Prototype {prototype_idx} — Signal + Top-{top_k} Concept Heatmaps',
+        fontsize=13, y=1.01
+    )
+
+    gs = fig.add_gridspec(
+        n_rows, n_cols,
+        height_ratios=[2] * n_channels + [1],
+        hspace=0.35, wspace=0.2
+    )
+
+    cmap_obj = plt.get_cmap(cmap)
+
+    def _overlay_signal_heatmap(ax, signal_ch, heat_ch, title='', ylabel=''):
+        abs_max = np.percentile(np.abs(heat_ch), 99)
+        if abs_max < 1e-12:
+            abs_max = 1.0
+        norm = Normalize(vmin=-abs_max, vmax=abs_max)
+        for ti in range(n_timesteps - 1):
+            color = cmap_obj(norm(float(heat_ch[ti])))
+            ax.axvspan(t[ti], t[ti + 1], color=color, alpha=alpha, linewidth=0)
+        ax.plot(t, signal_ch, color='black', linewidth=0.7)
+        ax.set_xlim(0, n_timesteps - 1)
+        ax.tick_params(labelsize=7)
+        if title:
+            ax.set_title(title, fontsize=9)
+        if ylabel:
+            ax.set_ylabel(ylabel, fontsize=9)
+
+    # Column 0: full heatmap overlay
+    for c in range(n_channels):
+        ax = fig.add_subplot(gs[c, 0])
+        ch_heat = closest_sample_heatmap[c] if c < closest_sample_heatmap.shape[0] else closest_sample_heatmap[0]
+        ch_sig = closest_sample_signal[c] if c < closest_sample_signal.shape[0] else closest_sample_signal[0]
+        title = 'Full heatmap' if c == 0 else ''
+        _overlay_signal_heatmap(ax, ch_sig, ch_heat, title=title, ylabel=used_axes[c])
+
+    # Compute per-concept conditional CRP heatmaps
+    attributor = TimeSeriesCondAttribution(model, no_param_grad=True)
+    signal_t = torch.tensor(closest_sample_signal, dtype=torch.float32).unsqueeze(0).to(device)
+
+    concept_heatmaps: List[Optional[np.ndarray]] = []
+    for filter_idx in top_filter_indices:
+        conditions = [{"y": class_id, layer_name: int(filter_idx)}]
+        try:
+            cond_heatmap, _, _, _ = attributor(signal_t, conditions, composite, record_layer=[])
+            heat_np = cond_heatmap.detach().cpu().numpy()[0]  # (C, T)
+        except Exception:
+            heat_np = np.zeros_like(closest_sample_signal)
+        concept_heatmaps.append(heat_np)
+
+    # Columns 1..top_k: per-concept conditional heatmaps
+    for col_offset, (filter_idx, heat_np) in enumerate(zip(top_filter_indices, concept_heatmaps)):
+        col = 1 + col_offset
+        for c in range(n_channels):
+            ax = fig.add_subplot(gs[c, col])
+            ch_heat = heat_np[c] if c < heat_np.shape[0] else heat_np[0]
+            ch_sig = closest_sample_signal[c] if c < closest_sample_signal.shape[0] else closest_sample_signal[0]
+            title = f'Filter {filter_idx}' if c == 0 else ''
+            _overlay_signal_heatmap(ax, ch_sig, ch_heat, title=title)
+
+    # Bottom row: bar chart of prototype filter magnitudes
+    ax_bar = fig.add_subplot(gs[n_channels, :])
+    n_filters = len(proto_mean)
+    bar_colors = ['#d62728' if i in top_filter_indices else '#aec7e8' for i in range(n_filters)]
+    ax_bar.bar(np.arange(n_filters), np.abs(proto_mean), color=bar_colors, width=0.8)
+    ax_bar.set_xlabel('Filter index', fontsize=9)
+    ax_bar.set_ylabel('|μ|', fontsize=9)
+    ax_bar.set_title('Prototype filter magnitudes (red = top-k)', fontsize=9)
+    ax_bar.tick_params(labelsize=7)
+
+    plt.tight_layout()
+    return fig
+
+
 if __name__ == "__main__":
     # Test visualization functions
     np.random.seed(42)

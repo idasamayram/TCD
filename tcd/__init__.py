@@ -23,7 +23,8 @@ from .visualization import (
     plot_prototype_gallery,
     plot_prototype_comparison,
     plot_attribution_graph,
-    plot_robustness_summary
+    plot_robustness_summary,
+    plot_pcx_prototype_concept_grid
 )
 from .robustness import (
     noise_robustness,
@@ -79,6 +80,7 @@ __all__ = [
     'plot_prototype_comparison',
     'plot_attribution_graph',
     'plot_robustness_summary',
+    'plot_pcx_prototype_concept_grid',
     
     # Robustness
     'noise_robustness',
