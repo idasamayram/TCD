@@ -518,7 +518,8 @@ def evaluate_variant_c(
                     model=model,
                     dataset=dataset,
                     layer_name=layer_name,
-                    concept_relevance_vectors=cls_relevance,
+                    concept_relevance_vectors=features_np,  #all samples
+                    labels=labels_np,
                     n_samples=inc_n_samples,
                     n_steps=inc_n_steps,
                     target_class=target_cls,
