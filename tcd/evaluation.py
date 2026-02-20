@@ -146,119 +146,135 @@ def compute_faithfulness_prototype_level(
 
 
 def compute_incremental_faithfulness(
-    model,
-    dataset,
-    layer_name: str,
-    concept_relevance_vectors: np.ndarray,
-    n_samples: int = 100,
-    n_steps: Optional[int] = None,
-    target_class: int = 0,
-    batch_size: int = 32,
-    device: str = 'cpu'
-) -> Dict:
+        model: torch.nn.Module,
+        dataset,
+        layer_name: str,
+        concept_relevances: np.ndarray,
+        labels: np.ndarray,
+        n_steps: int = 30,
+        batch_size: int = 32,
+        device: str = 'cuda'
+) -> dict:
     """
-    PCX-style incremental faithfulness with AUC.
+    PCX-style incremental faithfulness (perturbation AUC).
 
-    Adapted from PCX ``experiments/faithfulness/faithfulness.py`` (lines 161-189)
-    for 1D time-series.  Concepts (filters) are sorted by their mean relevance
-    across the provided samples and suppressed one-by-one from most to least
-    relevant.  At each step the mean logit change vs. the baseline is recorded.
-    The Area Under the Curve (AUC) via ``np.trapz`` is the summary statistic —
-    higher AUC means suppressing the most-relevant concepts causes larger logit
-    changes, indicating the concepts are more faithful.
+    For each sample:
+    1. Sort concepts by relevance (from concept_relevances)
+    2. Progressively suppress top-k concepts (k = 0, 1, ..., N)
+    3. Measure logit change for the target class
+    4. Compute AUC under the perturbation curve
+
+    Compare against random ordering baseline.
 
     Args:
-        model: PyTorch model (already on the correct device).
-        dataset: Dataset used to draw samples from ``target_class``.
-        layer_name: Name of the layer to intervene on.
-        concept_relevance_vectors: Array of shape ``(n_samples, n_concepts)``
-            containing concept relevance vectors for ``target_class`` samples.
-        n_samples: Maximum number of samples to use for the measurement.
-        n_steps: Number of suppression steps (defaults to n_concepts).
-        target_class: Class whose logit is monitored.
-        batch_size: Batch size for forward passes.
-        device: Torch device string.
+        model: The CNN model
+        dataset: Dataset with (signal, label) pairs
+        layer_name: Layer to intervene on (e.g. 'conv3')
+        concept_relevances: Per-sample concept vectors, shape (N, n_filters)
+                           These should be abs_norm=True normalized CRVs
+        labels: True labels, shape (N,)
+        n_steps: Number of suppression steps
+        batch_size: Batch size for forward passes
+        device: Device string
 
     Returns:
-        Dictionary with keys:
-        - ``'auc'``: scalar AUC value (higher = more faithful)
-        - ``'steps'``: list of k values (x-axis)
-        - ``'mean_logit_changes'``: list of mean logit changes at each step
-        - ``'n_samples_used'``: actual number of samples used
+        dict with 'auc_relevance', 'auc_random', 'auc_ratio',
+        'perturbation_curve_relevance', 'perturbation_curve_random', 'steps'
     """
     from torch.utils.data import DataLoader, Subset
-    from tcd.intervention import ConceptInterventionHook
 
+    model.to(device)
     model.eval()
-    torch_device = torch.device(device)
-    model.to(torch_device)
 
-    # Normalize relevance vectors to always be 2D: (n_samples, n_concepts)
-    concept_relevance_vectors = np.atleast_2d(concept_relevance_vectors)
-    n_concepts = concept_relevance_vectors.shape[1]
-    mean_relevance = np.abs(concept_relevance_vectors).mean(axis=0)
+    n_samples = len(dataset)
+    n_concepts = concept_relevances.shape[1]
 
-    # Sort concepts by mean absolute relevance (most relevant first)
-    sorted_concept_indices = np.argsort(mean_relevance)[::-1]
+    # Determine step sizes
+    total_concepts = n_concepts
+    steps = np.round(np.linspace(0, total_concepts, min(n_steps, total_concepts))).astype(int)
+    steps = np.unique(steps)  # Remove duplicates
 
-    # Collect target-class sample indices
-    class_indices = [i for i, (_, lbl) in enumerate(dataset) if lbl == target_class]
-    class_indices = class_indices[:n_samples]
-    if len(class_indices) == 0:
-        return {'auc': 0.0, 'steps': [], 'mean_logit_changes': [], 'n_samples_used': 0}
+    # Per-sample: sort concepts by relevance (descending)
+    # concept_relevances shape: (N, n_filters)
+    relevance_order = np.argsort(-np.abs(concept_relevances), axis=1)  # (N, n_filters)
 
-    subset = Subset(dataset, class_indices)
-    loader = DataLoader(subset, batch_size=batch_size, shuffle=False)
+    # Random baseline order
+    rng = np.random.RandomState(42)
+    random_order = np.array([rng.permutation(n_concepts) for _ in range(n_samples)])
 
-    # Collect all data and compute baseline logits
-    all_data: List[torch.Tensor] = []
-    for batch_x, _ in loader:
-        all_data.append(batch_x)
-    all_data_tensor = torch.cat(all_data).to(torch_device)
+    results = {'relevance': [], 'random': []}
 
-    with torch.no_grad():
-        baseline_output = model(all_data_tensor)
-    baseline_logits = baseline_output[:, target_class].cpu().numpy()  # (N,)
+    for ordering_name, ordering in [('relevance', relevance_order), ('random', random_order)]:
+        logit_changes = []
 
-    # Find target layer module
-    target_module = None
-    for name, module in model.named_modules():
-        if name == layer_name:
-            target_module = module
-            break
-    if target_module is None:
-        raise ValueError(f"Layer '{layer_name}' not found in model")
+        for k in steps:
+            total_change = 0.0
+            count = 0
 
-    if n_steps is None:
-        n_steps = n_concepts
+            loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+            sample_idx = 0
 
-    steps = list(range(1, min(n_steps, n_concepts) + 1))
-    mean_logit_changes: List[float] = []
+            for data, batch_labels in loader:
+                bs = data.shape[0]
+                data = data.to(device)
 
-    for k in steps:
-        # Suppress the top-k most relevant concepts
-        suppressed_indices = sorted_concept_indices[:k].tolist()
-        hook = ConceptInterventionHook(method='suppress', concept_indices=suppressed_indices)
-        handle = target_module.register_forward_hook(hook)
+                # Original logits
+                with torch.no_grad():
+                    original_out = model(data)
 
-        with torch.no_grad():
-            intervened_output = model(all_data_tensor)
-        handle.remove()
+                # For each sample in batch, suppress its top-k concepts
+                # We need per-sample suppression indices
+                batch_indices = ordering[sample_idx:sample_idx + bs, :k]  # (bs, k)
 
-        intervened_logits = intervened_output[:, target_class].cpu().numpy()
-        logit_change = np.abs(baseline_logits - intervened_logits).mean()
-        mean_logit_changes.append(float(logit_change))
+                # Register hook that suppresses per-sample indices
+                def make_hook(indices_batch):
+                    def hook_fn(module, input, output):
+                        modified = output.clone()
+                        for i in range(min(len(indices_batch), modified.shape[0])):
+                            if len(indices_batch[i]) > 0:
+                                for idx in indices_batch[i]:
+                                    if idx < modified.shape[1]:
+                                        modified[i, idx, :] = 0.0
+                        return modified
 
-    # Compute AUC via trapezoidal rule
-    auc = float(np.trapz(mean_logit_changes, x=steps)) if len(steps) > 1 else 0.0
+                    return hook_fn
+
+                # Find target layer
+                target_module = dict(model.named_modules())[layer_name]
+                handle = target_module.register_forward_hook(make_hook(batch_indices))
+
+                with torch.no_grad():
+                    masked_out = model(data)
+
+                handle.remove()
+
+                # Logit change for target class (per-sample)
+                for i in range(bs):
+                    target_class = int(batch_labels[i])
+                    change = (masked_out[i, target_class] - original_out[i, target_class]).item()
+                    total_change += change
+                    count += 1
+
+                sample_idx += bs
+
+            mean_change = total_change / max(count, 1)
+            logit_changes.append(mean_change)
+
+        results[ordering_name] = np.array(logit_changes)
+
+    # Compute AUC (normalize steps to [0, 1])
+    normalized_steps = steps / total_concepts
+    auc_relevance = np.trapz(results['relevance'], normalized_steps)
+    auc_random = np.trapz(results['random'], normalized_steps)
 
     return {
-        'auc': auc,
-        'steps': steps,
-        'mean_logit_changes': mean_logit_changes,
-        'n_samples_used': len(class_indices)
+        'auc_relevance': float(auc_relevance),
+        'auc_random': float(auc_random),
+        'auc_ratio': float(auc_relevance / auc_random) if auc_random != 0 else float('inf'),
+        'perturbation_curve_relevance': results['relevance'].tolist(),
+        'perturbation_curve_random': results['random'].tolist(),
+        'steps': steps.tolist()
     }
-
 
 
 def compute_stability(
