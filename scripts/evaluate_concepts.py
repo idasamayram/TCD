@@ -536,10 +536,18 @@ def evaluate_variant_c(
                     import matplotlib.pyplot as plt
                     os.makedirs(output_path, exist_ok=True)
                     fig, ax = plt.subplots(figsize=(8, 5))
-                    ax.plot(result['steps'], result['mean_logit_changes'], marker='o', linewidth=2)
-                    ax.set_xlabel('Number of suppressed concepts (sorted by relevance)')
+                    ax.plot(result['steps'], result['mean_logit_changes'],
+                            marker='o', linewidth=2, label=f'Relevance-ordered (AUC={result["auc"]:.4f})')
+                    ax.plot(result['steps'], result['perturbation_curve_random'],
+                            marker='s', linewidth=2, linestyle='--',
+                            label=f'Random baseline (AUC={result["auc_random"]:.4f})')
+                    ax.set_xlabel('Number of suppressed concepts')
                     ax.set_ylabel('Mean logit change')
-                    ax.set_title(f'Incremental Faithfulness — {class_name} (Class {target_cls})\nAUC={result["auc"]:.4f}')
+                    ax.set_title(
+                        f'Incremental Faithfulness — {class_name} (Class {target_cls})\n'
+                        f'AUC relevance={result["auc"]:.4f}, AUC random={result["auc_random"]:.4f}'
+                    )
+                    ax.legend()
                     ax.grid(True, alpha=0.3)
                     plot_path = os.path.join(output_path, f'incremental_faithfulness_class_{target_cls}.png')
                     fig.savefig(plot_path, dpi=150, bbox_inches='tight')
@@ -682,12 +690,141 @@ def evaluate_variant_c(
             print(f"  Warning: Could not perform robustness analysis: {e}")
             traceback.print_exc()
     
-    # Note: plot_prototype_samples requires loading actual signals from samples
-    # For a complete implementation, we would load the closest samples to each prototype
-    # and generate visualizations. For now we note this requirement.
-    print("\nPrototype sample visualization:")
-    print("  Note: Requires loading sample signals for closest prototypes")
-    print("  This would be added in a complete implementation with dataset access")
+    # Prototype sample visualization
+    if config.get('evaluation', {}).get('prototype_sample_vis', True):
+        print("\n" + "="*60)
+        print("PROTOTYPE SAMPLE VISUALIZATION")
+        print("="*60)
+        try:
+            from tcd.visualization import plot_prototype_samples, plot_prototype_gallery, plot_pcx_prototype_concept_grid
+            from tcd.composites import CNCValidatedComposite
+            from tcd.attribution import TimeSeriesCondAttribution
+
+            composite = CNCValidatedComposite()
+            attributor = TimeSeriesCondAttribution(model, no_param_grad=True)
+            proto_vis_dir = os.path.join(output_path, 'prototype_samples')
+            os.makedirs(proto_vis_dir, exist_ok=True)
+
+            # Collect dataset indices per class (class 0 first, then class 1 — same order
+            # as features were extracted in discover_concepts.py)
+            class_dataset_indices = {0: [], 1: []}
+            for idx, (_, lbl) in enumerate(dataset):
+                lbl_int = int(lbl)
+                if lbl_int in class_dataset_indices:
+                    class_dataset_indices[lbl_int].append(idx)
+
+            for class_id in [0, 1]:
+                class_name = "OK" if class_id == 0 else "NOK"
+                if class_id not in tcd.prototype_discovery.gmms:
+                    continue
+
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                n_proto = gmm.n_components
+                top_k_proto = config.get('evaluation', {}).get('prototype_top_k', 6)
+
+                proto_samples = tcd.prototype_discovery.find_prototypes(
+                    class_id=class_id, top_k=top_k_proto
+                )
+
+                ds_indices_for_class = class_dataset_indices[class_id]
+                class_features_np = features[labels == class_id].cpu().numpy()
+
+                all_signals = {}
+                all_heatmaps = {}
+                all_distances = {}
+
+                for proto_idx, sample_positions in proto_samples.items():
+                    signals_proto = []
+                    heatmaps_proto = []
+                    distances_proto = []
+                    proto_mean = gmm.means_[proto_idx]
+
+                    for pos in sample_positions:
+                        if pos >= len(ds_indices_for_class):
+                            continue
+                        ds_idx = ds_indices_for_class[pos]
+                        signal_tensor, _ = dataset[ds_idx]
+                        signal_np = signal_tensor.cpu().numpy() if hasattr(signal_tensor, 'cpu') else np.array(signal_tensor)
+
+                        # Compute CRP heatmap (full, not conditional on specific filter)
+                        data_p = signal_tensor.unsqueeze(0).to(device)
+                        conditions = [{"y": class_id}]
+                        try:
+                            cond_heatmap, _, _, _ = attributor(
+                                data_p, conditions, composite, record_layer=[]
+                            )
+                            heat_np = cond_heatmap.detach().cpu().numpy()[0]
+                        except Exception:
+                            heat_np = np.zeros_like(signal_np)
+
+                        # Distance to prototype mean
+                        if pos < len(class_features_np):
+                            dist = float(np.linalg.norm(class_features_np[pos] - proto_mean))
+                        else:
+                            dist = 0.0
+
+                        signals_proto.append(signal_np)
+                        heatmaps_proto.append(heat_np)
+                        distances_proto.append(dist)
+
+                    if not signals_proto:
+                        continue
+
+                    all_signals[proto_idx] = signals_proto
+                    all_heatmaps[proto_idx] = heatmaps_proto
+                    all_distances[proto_idx] = distances_proto
+
+                    # Individual prototype figure
+                    fig = plot_prototype_samples(
+                        signals=signals_proto,
+                        heatmaps=heatmaps_proto,
+                        prototype_idx=proto_idx,
+                        sample_distances=distances_proto,
+                        title=f'{class_name} Prototype {proto_idx}: Representative Samples'
+                    )
+                    fig_path = os.path.join(proto_vis_dir, f'proto_samples_class{class_id}_proto{proto_idx}.png')
+                    fig.savefig(fig_path, dpi=150, bbox_inches='tight')
+                    plt.close(fig)
+                    print(f"  Saved {fig_path}")
+
+                    # PCX-style prototype+concept grid
+                    try:
+                        grid_fig = plot_pcx_prototype_concept_grid(
+                            model=model,
+                            dataset=dataset,
+                            prototype_idx=proto_idx,
+                            proto_mean=proto_mean,
+                            closest_sample_signal=signals_proto[0],
+                            closest_sample_heatmap=heatmaps_proto[0],
+                            layer_name=layer_name,
+                            composite=composite,
+                            top_k=top_k_proto,
+                            class_id=class_id,
+                            device=device
+                        )
+                        grid_path = os.path.join(proto_vis_dir, f'pcx_grid_class{class_id}_proto{proto_idx}.png')
+                        grid_fig.savefig(grid_path, dpi=150, bbox_inches='tight')
+                        plt.close(grid_fig)
+                        print(f"  Saved PCX grid {grid_path}")
+                    except Exception as grid_err:
+                        print(f"  Warning: Could not generate PCX grid for class {class_id} proto {proto_idx}: {grid_err}")
+
+                # Gallery figure for the class
+                if all_signals:
+                    gallery_fig = plot_prototype_gallery(
+                        all_signals=all_signals,
+                        all_heatmaps=all_heatmaps,
+                        all_distances=all_distances,
+                        class_id=class_id
+                    )
+                    gallery_path = os.path.join(proto_vis_dir, f'proto_gallery_class{class_id}.png')
+                    gallery_fig.savefig(gallery_path, dpi=150, bbox_inches='tight')
+                    plt.close(gallery_fig)
+                    print(f"  Saved gallery {gallery_path}")
+
+        except Exception as e:
+            print(f"  Warning: Could not generate prototype sample visualizations: {e}")
+            traceback.print_exc()
     
     # Save evaluation
     '''
