@@ -326,7 +326,7 @@ def run_variant_c(
             covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
             n_init=config['tcd'].get('gmm_n_init', 5),
             max_iter=config['tcd'].get('gmm_max_iter', 200),
-            balance_method=config['tcd'].get('balance_method', 'downsample')
+            balance_method=config['tcd'].get('balance_method', 'none')
         )
         
         # Build features_dict for select_optimal_n_prototypes

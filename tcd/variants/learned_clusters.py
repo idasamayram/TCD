@@ -94,7 +94,7 @@ class LearnedClusterTCD:
             covariance_type=covariance_type,
             n_init=n_init,
             max_iter=max_iter,
-            balance_method='none'
+            balance_method=balance_method
         )
         
         self.fitted = False
