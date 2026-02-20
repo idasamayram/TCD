@@ -269,6 +269,15 @@ def run_variant_c(
         return
     
     features = torch.from_numpy(np.concatenate(features_list)).float()
+
+    # === CRITICAL: Normalize like PCX does ===
+    # abs_norm: each sample's concept vector sums to 1.0 in absolute value
+    abs_sums = features.abs().sum(dim=1, keepdim=True)
+    abs_sums = abs_sums.clamp(min=1e-10)  # avoid division by zero
+    features = features / abs_sums
+
+    print(f"  Applied abs_norm normalization (sum of |features| = 1.0 per sample)")
+
     labels = torch.tensor(labels_list).long()
     outputs = torch.stack(outputs_list)
     
