@@ -564,7 +564,9 @@ def evaluate_variant_c(
     print("\n" + "="*60)
     print("GENERATING VISUALIZATIONS")
     print("="*60)
-    
+
+    os.makedirs(output_path, exist_ok=True)
+
     # Concept conditional heatmaps if enabled
     if config.get('evaluation', {}).get('concept_heatmaps', True):
         from tcd.visualization import generate_concept_heatmaps
@@ -593,6 +595,99 @@ def evaluate_variant_c(
             print(f"  Generated {len(concept_heatmap_figs)} concept heatmap figures")
         except Exception as e:
             print(f"  Warning: Could not generate concept heatmaps: {e}")
+
+    # UMAP visualization of CRV space
+    print("\nGenerating UMAP/PCA visualization of CRV space...")
+    try:
+        from tcd.visualization import plot_umap_prototypes
+
+        features_np = features.numpy() if hasattr(features, 'numpy') else np.array(features)
+        labels_np = labels.numpy() if hasattr(labels, 'numpy') else np.array(labels)
+
+        proto_assignments = np.full(len(features_np), -1, dtype=int)
+        gmm_means_dict = {}
+        for cid in [0, 1]:
+            if cid not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[cid]
+            class_mask = labels_np == cid
+            class_feat = features[labels == cid]
+            if len(class_feat) > 0:
+                assignments = tcd.assign_prototype(class_feat, cid)
+                proto_assignments[class_mask] = assignments + cid * gmm.n_components
+            gmm_means_dict[cid] = gmm.means_
+
+        fig_umap = plot_umap_prototypes(
+            features=features_np,
+            labels=labels_np,
+            prototype_assignments=proto_assignments,
+            gmm_means=gmm_means_dict
+        )
+        umap_path = os.path.join(output_path, 'umap_crv_space.png')
+        fig_umap.savefig(umap_path, dpi=150, bbox_inches='tight')
+        plt.close(fig_umap)
+        print(f"  Saved UMAP/PCA plot to {umap_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate UMAP visualization: {e}")
+
+    # Concept-Prototype Matrix (PCX Figure 5 equivalent)
+    print("\nGenerating concept-prototype matrices...")
+    try:
+        from tcd.visualization import plot_concept_prototype_matrix
+
+        for cid in [0, 1]:
+            if cid not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[cid]
+            cov_pct = None
+            try:
+                class_mask = labels == cid
+                assignments = tcd.assign_prototype(features[class_mask], cid)
+                counts = np.bincount(assignments, minlength=gmm.n_components)
+                cov_pct = 100.0 * counts / (counts.sum() + 1e-9)
+            except Exception:
+                pass
+
+            top_k_eval = config.get('evaluation', {}).get('prototype_top_k', 5)
+            fig_mat = plot_concept_prototype_matrix(
+                gmm_means=gmm.means_,
+                class_id=cid,
+                n_top_concepts=top_k_eval,
+                coverage_pct=cov_pct,
+                filter_names=[f"F{i}" for i in range(features.shape[1])]
+            )
+            mat_path = os.path.join(output_path, f'concept_prototype_matrix_class{cid}.png')
+            fig_mat.savefig(mat_path, dpi=150, bbox_inches='tight')
+            plt.close(fig_mat)
+            print(f"  Saved concept-prototype matrix to {mat_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate concept-prototype matrix: {e}")
+
+    # Attribution graph (one per prototype per class)
+    print("\nGenerating attribution graphs...")
+    try:
+        from tcd.visualization import plot_attribution_graph
+
+        top_k_attr = config.get('evaluation', {}).get('prototype_top_k', 5)
+        for cid in [0, 1]:
+            if cid not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[cid]
+            for proto_idx in range(gmm.n_components):
+                fig_attr = plot_attribution_graph(
+                    prototype_mean=gmm.means_[proto_idx],
+                    class_id=cid,
+                    top_k=top_k_attr
+                )
+                attr_path = os.path.join(
+                    output_path,
+                    f'attribution_graph_class_{cid}_proto_{proto_idx}.png'
+                )
+                fig_attr.savefig(attr_path, dpi=150, bbox_inches='tight')
+                plt.close(fig_attr)
+                print(f"  Saved attribution graph to {attr_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate attribution graphs: {e}")
     
     # Save evaluation
     os.makedirs(output_path, exist_ok=True)

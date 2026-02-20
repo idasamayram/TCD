@@ -572,7 +572,7 @@ def run_variant_c(
         for class_id in [0, 1]:
             if class_id in tcd.prototype_discovery.gmms:
                 gmm = tcd.prototype_discovery.gmms[class_id]
-                for proto_idx in range(tcd.n_prototypes):
+                for proto_idx in range(gmm.n_components):
                     prototype_mean = gmm.means_[proto_idx]
                     if class_id == 0:
                         ok_prototypes.append(prototype_mean)
@@ -606,6 +606,101 @@ def run_variant_c(
     print("\nPrototype gallery generation:")
     print("  Note: Full gallery generation requires loading sample signals")
     print("  This would be added in a complete implementation")
+
+    # UMAP visualization of CRV space
+    print("\nGenerating UMAP/PCA visualization of CRV space...")
+    try:
+        from tcd.visualization import plot_umap_prototypes
+
+        features_np = features.numpy() if hasattr(features, 'numpy') else np.array(features)
+        labels_np = labels.numpy() if hasattr(labels, 'numpy') else np.array(labels)
+
+        # Build per-sample prototype assignments across all classes
+        proto_assignments = np.full(len(features_np), -1, dtype=int)
+        gmm_means_dict = {}
+        for class_id in [0, 1]:
+            if class_id not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[class_id]
+            class_mask = labels_np == class_id
+            class_feat = features_np[class_mask]
+            if len(class_feat) > 0:
+                assignments = tcd.assign_prototype(
+                    features[labels == class_id], class_id
+                )
+                proto_assignments[class_mask] = assignments + class_id * gmm.n_components
+            gmm_means_dict[class_id] = gmm.means_
+
+        fig_umap = plot_umap_prototypes(
+            features=features_np,
+            labels=labels_np,
+            prototype_assignments=proto_assignments,
+            gmm_means=gmm_means_dict
+        )
+        umap_path = os.path.join(output_path, 'umap_crv_space.png')
+        fig_umap.savefig(umap_path, dpi=150, bbox_inches='tight')
+        plt.close(fig_umap)
+        print(f"  Saved UMAP/PCA plot to {umap_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate UMAP visualization: {e}")
+
+    # Concept-Prototype Matrix (PCX Figure 5 equivalent)
+    print("\nGenerating concept-prototype matrices...")
+    try:
+        from tcd.visualization import plot_concept_prototype_matrix
+
+        for class_id in [0, 1]:
+            if class_id not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[class_id]
+            cov_pct = None
+            try:
+                class_mask = labels == class_id
+                assignments = tcd.assign_prototype(features[class_mask], class_id)
+                counts = np.bincount(assignments, minlength=gmm.n_components)
+                cov_pct = 100.0 * counts / (counts.sum() + 1e-9)
+            except Exception:
+                pass
+
+            fig_mat = plot_concept_prototype_matrix(
+                gmm_means=gmm.means_,
+                class_id=class_id,
+                n_top_concepts=config['tcd'].get('top_k_samples', 5),
+                coverage_pct=cov_pct,
+                filter_names=[f"F{i}" for i in range(features.shape[1])]
+            )
+            mat_path = os.path.join(output_path, f'concept_prototype_matrix_class{class_id}.png')
+            fig_mat.savefig(mat_path, dpi=150, bbox_inches='tight')
+            plt.close(fig_mat)
+            print(f"  Saved concept-prototype matrix to {mat_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate concept-prototype matrix: {e}")
+
+    # Attribution graph (one per prototype per class)
+    print("\nGenerating attribution graphs...")
+    try:
+        from tcd.visualization import plot_attribution_graph
+
+        top_k_attr = config['tcd'].get('top_k_samples', 5)
+        for class_id in [0, 1]:
+            if class_id not in tcd.prototype_discovery.gmms:
+                continue
+            gmm = tcd.prototype_discovery.gmms[class_id]
+            for proto_idx in range(gmm.n_components):
+                fig_attr = plot_attribution_graph(
+                    prototype_mean=gmm.means_[proto_idx],
+                    class_id=class_id,
+                    top_k=top_k_attr
+                )
+                attr_path = os.path.join(
+                    output_path,
+                    f'attribution_graph_class{class_id}_proto{proto_idx}.png'
+                )
+                fig_attr.savefig(attr_path, dpi=150, bbox_inches='tight')
+                plt.close(fig_attr)
+                print(f"  Saved attribution graph to {attr_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate attribution graphs: {e}")
     
     # Save results
     print("\n" + "="*80)

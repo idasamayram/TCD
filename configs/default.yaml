@@ -26,7 +26,7 @@ tcd:
   n_concepts: 6  # Number of concepts for window-based discovery (Variant A)
   
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
-  n_prototypes: 4  # Number of prototypes per class (or use use_bic_selection)
+  n_prototypes: 3  # Number of prototypes per class (or use use_bic_selection)
   use_bic_selection: false  # If true, use BIC to select optimal n_prototypes
   bic_range: [1, 2, 3, 4]  # Range to search for optimal n_prototypes
   top_k_samples: 6  # Top-k samples per prototype for visualization

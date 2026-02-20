@@ -913,7 +913,7 @@ def generate_concept_heatmaps(
             ])
             class_feat = None
 
-        for proto_idx in range(prototype_discovery.n_prototypes):
+        for proto_idx in range(gmm.n_components):
             # Get prototype center μ
             prototype_mean = gmm.means_[proto_idx]
 
@@ -1158,6 +1158,238 @@ def plot_pcx_prototype_concept_grid(
     ax_bar.set_ylabel('|μ|', fontsize=9)
     ax_bar.set_title('Prototype filter magnitudes (red = top-k)', fontsize=9)
     ax_bar.tick_params(labelsize=7)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_umap_prototypes(
+    features: np.ndarray,
+    labels: np.ndarray,
+    prototype_assignments: np.ndarray,
+    gmm_means: Optional[Dict[int, np.ndarray]] = None,
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    figsize: Tuple[int, int] = (12, 8),
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    random_state: int = 42
+) -> plt.Figure:
+    """
+    UMAP visualization of CRV (Concept Relevance Vector) space.
+
+    Projects high-dimensional CRP feature vectors into 2D using UMAP (or PCA as
+    fallback) and colors points by class and prototype assignment.  Optionally
+    overlays GMM component means projected into the same 2D space.
+
+    Args:
+        features: CRV feature matrix of shape (N, n_filters).
+        labels: Class labels of shape (N,).
+        prototype_assignments: Prototype index per sample of shape (N,).
+        gmm_means: Optional dict mapping class_id -> array (n_proto, n_filters)
+            of GMM component means.  When provided, means are projected and
+            plotted as large stars.
+        class_names: Mapping from class ID to display name.
+        figsize: Figure size.
+        n_neighbors: UMAP n_neighbors parameter.
+        min_dist: UMAP min_dist parameter.
+        random_state: Random seed for reproducibility.
+
+    Returns:
+        Matplotlib figure with two side-by-side scatter plots: one colored by
+        class, one colored by prototype assignment.
+    """
+    # --- Dimensionality reduction ---
+    try:
+        import umap
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            random_state=random_state
+        )
+        method_name = "UMAP"
+    except ImportError:
+        from sklearn.decomposition import PCA
+        reducer = PCA(n_components=2, random_state=random_state)
+        method_name = "PCA"
+
+    # Fit on all samples (optionally include GMM means for consistent projection)
+    all_points = features
+    if gmm_means is not None:
+        means_list = [m for m in gmm_means.values()]
+        if means_list:
+            all_points = np.vstack([features] + means_list)
+
+    embedding = reducer.fit_transform(all_points)
+    feat_emb = embedding[:len(features)]
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig.suptitle(f"CRV Space — {method_name} Projection", fontsize=14, fontweight='bold')
+
+    # --- Left: colored by class ---
+    ax = axes[0]
+    class_colors = {0: 'green', 1: 'red'}
+    for cid, cname in class_names.items():
+        mask = labels == cid
+        if mask.sum() == 0:
+            continue
+        ax.scatter(
+            feat_emb[mask, 0], feat_emb[mask, 1],
+            c=class_colors.get(cid, 'blue'),
+            label=cname, alpha=0.5, s=20, edgecolors='none'
+        )
+    ax.set_title("By Class")
+    ax.set_xlabel(f"{method_name} 1")
+    ax.set_ylabel(f"{method_name} 2")
+    ax.legend(markerscale=2)
+    ax.grid(True, alpha=0.3)
+
+    # --- Right: colored by prototype assignment ---
+    ax = axes[1]
+    unique_protos = np.unique(prototype_assignments[prototype_assignments >= 0])
+    proto_cmap = plt.get_cmap('tab10')
+    markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+']
+
+    for pi in unique_protos:
+        mask = prototype_assignments == pi
+        color = proto_cmap(int(pi) % 10)
+        marker = markers[int(pi) % len(markers)]
+        ax.scatter(
+            feat_emb[mask, 0], feat_emb[mask, 1],
+            c=[color], marker=marker,
+            label=f"Proto {pi}", alpha=0.6, s=25, edgecolors='none'
+        )
+
+    # Overlay GMM means if provided
+    if gmm_means is not None:
+        offset = len(features)
+        for cid, means in gmm_means.items():
+            for pi in range(len(means)):
+                mean_emb = embedding[offset]
+                offset += 1
+                ax.scatter(
+                    mean_emb[0], mean_emb[1],
+                    c='black', marker='*', s=200, zorder=5,
+                    label=f"μ class{cid}" if pi == 0 else None
+                )
+
+    ax.set_title("By Prototype Assignment")
+    ax.set_xlabel(f"{method_name} 1")
+    ax.set_ylabel(f"{method_name} 2")
+    ax.legend(markerscale=2, fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_concept_prototype_matrix(
+    gmm_means: np.ndarray,
+    class_id: int,
+    n_top_concepts: int = 5,
+    coverage_pct: Optional[np.ndarray] = None,
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    filter_names: Optional[List[str]] = None,
+    figsize: Tuple[int, int] = (10, 8)
+) -> plt.Figure:
+    """
+    Concept-Prototype Matrix (PCX paper Figure 5 equivalent).
+
+    Shows at a glance which concepts characterize each prototype.  Follows the
+    PCX ``plot_prototypes_with_concepts.py`` logic:
+
+        prototypes = torch.from_numpy(gmm.means_)
+        top_concepts = torch.topk(prototypes.abs(), n_top_concepts).indices.flatten().unique()
+        top_concepts = top_concepts[
+            prototypes[:, top_concepts].abs().amax(0).argsort(descending=True)
+        ]
+        concept_matrix = prototypes[:, top_concepts].T  # (n_top, n_proto)
+
+    Cell (i, j) shows ``μ_j[concept_i] * 100`` with red=positive, blue=negative
+    intensity proportional to magnitude.
+
+    Args:
+        gmm_means: GMM component means of shape (n_prototypes, n_filters).
+        class_id: Class index (used for title).
+        n_top_concepts: Number of top concepts to display.
+        coverage_pct: Optional per-prototype coverage percentages of shape
+            (n_prototypes,) to show in column headers.
+        class_names: Mapping from class_id to display name.
+        filter_names: Optional list of filter labels.
+        figsize: Figure size.
+
+    Returns:
+        Matplotlib figure containing the concept-prototype matrix.
+    """
+    import torch as _torch
+
+    prototypes = _torch.from_numpy(np.array(gmm_means, dtype=np.float32))
+    n_proto, n_filters = prototypes.shape
+
+    # PCX-style top concept selection
+    top_k = min(n_top_concepts, n_filters)
+    top_concepts = _torch.topk(prototypes.abs(), top_k).indices.flatten().unique()
+    # Sort by max absolute value across prototypes (most discriminative first)
+    top_concepts = top_concepts[
+        prototypes[:, top_concepts].abs().amax(0).argsort(descending=True)
+    ]
+    top_concepts_np = top_concepts.numpy()
+
+    concept_matrix = prototypes[:, top_concepts].T.numpy()  # (n_top, n_proto)
+
+    # Build labels
+    if filter_names is not None:
+        row_labels = [
+            filter_names[int(i)] if int(i) < len(filter_names) else f"Filter {int(i)}"
+            for i in top_concepts_np
+        ]
+    else:
+        row_labels = [f"Filter {int(i)}" for i in top_concepts_np]
+
+    class_name = class_names.get(class_id, f"Class {class_id}")
+    col_labels = []
+    for pi in range(n_proto):
+        label = f"Proto {pi}"
+        if coverage_pct is not None and pi < len(coverage_pct):
+            label += f"\n({coverage_pct[pi]:.0f}%)"
+        col_labels.append(label)
+
+    # --- Plot ---
+    n_rows_mat, n_cols_mat = concept_matrix.shape
+    fig, ax = plt.subplots(figsize=figsize)
+    fig.suptitle(
+        f"Concept-Prototype Matrix — {class_name}",
+        fontsize=14, fontweight='bold'
+    )
+
+    # Symmetric color scale
+    vmax = np.abs(concept_matrix * 100).max()
+    if vmax < 1e-6:
+        vmax = 1.0
+
+    im = ax.imshow(
+        concept_matrix * 100,
+        cmap='RdBu_r', vmin=-vmax, vmax=vmax,
+        aspect='auto'
+    )
+
+    # Annotate cells
+    for i in range(n_rows_mat):
+        for j in range(n_cols_mat):
+            val = concept_matrix[i, j] * 100
+            text_color = 'white' if abs(val) > vmax * 0.6 else 'black'
+            ax.text(j, i, f"{val:+.1f}", ha='center', va='center',
+                    fontsize=9, color=text_color)
+
+    ax.set_xticks(np.arange(n_cols_mat))
+    ax.set_xticklabels(col_labels, fontsize=9)
+    ax.set_yticks(np.arange(n_rows_mat))
+    ax.set_yticklabels(row_labels, fontsize=9)
+    ax.set_xlabel("Prototype")
+    ax.set_ylabel("Concept (filter)")
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("μ × 100 (% contribution)", fontsize=9)
 
     plt.tight_layout()
     return fig
