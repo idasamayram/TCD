@@ -149,7 +149,7 @@ def compute_incremental_faithfulness(
         model: torch.nn.Module,
         dataset,
         layer_name: str,
-        concept_relevances: np.ndarray,
+        concept_relevance_vectors: np.ndarray,
         labels: np.ndarray,
         n_steps: int = 30,
         batch_size: int = 32,
@@ -187,7 +187,7 @@ def compute_incremental_faithfulness(
     model.eval()
 
     n_samples = len(dataset)
-    n_concepts = concept_relevances.shape[1]
+    n_concepts = concept_relevance_vectors.shape[1]
 
     # Determine step sizes
     total_concepts = n_concepts
@@ -196,7 +196,7 @@ def compute_incremental_faithfulness(
 
     # Per-sample: sort concepts by relevance (descending)
     # concept_relevances shape: (N, n_filters)
-    relevance_order = np.argsort(-np.abs(concept_relevances), axis=1)  # (N, n_filters)
+    relevance_order = np.argsort(-np.abs(concept_relevance_vectors), axis=1)  # (N, n_filters)
 
     # Random baseline order
     rng = np.random.RandomState(42)
