@@ -70,7 +70,7 @@ class LearnedClusterTCD:
         covariance_type: str = 'diag',
         n_init: int = 5,
         max_iter: int = 200,
-        balance_method: str = 'downsample'
+        balance_method: str = 'none'
     ):
         """
         Initialize learned cluster TCD.
@@ -94,7 +94,7 @@ class LearnedClusterTCD:
             covariance_type=covariance_type,
             n_init=n_init,
             max_iter=max_iter,
-            balance_method=balance_method
+            balance_method='none'
         )
         
         self.fitted = False

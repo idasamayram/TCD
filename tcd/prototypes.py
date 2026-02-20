@@ -43,7 +43,7 @@ class TemporalPrototypeDiscovery:
         n_init: int = 5,
         max_iter: int = 200,
         random_state: int = 0,
-        balance_method: str = 'downsample'
+        balance_method: str = 'none'
     ):
         """
         Initialize prototype discovery.

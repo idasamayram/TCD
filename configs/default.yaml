@@ -18,17 +18,17 @@ analysis:
   concept_extraction_composite: "cnc_validated"  # Composite for concept extraction (Option A: use "epsilon_plus_flat" for all-positive relevance)
   use_signed_relevance: false  # If true, preserve sign in relevance (Option B: handle positive/negative contributions separately)
   batch_size: 4  # Small batch for CRP memory constraints (full backward graph required)
-  use_class_weights: true  # Apply inverse-frequency class weights to concept relevances
+  use_class_weights: false  # Apply inverse-frequency class weights to concept relevances
 
 tcd:
   variant: "C"  # PRIMARY: C (CRP-native concepts), A (filterbank/window), B (temporal), D (vibration features)
-  primary_layer: "conv4"  # Layer to use for concept discovery (conv3 has 64 filters) -- changed to conv4 for more direct output impact, but conv3 may yield richer concepts
+  primary_layer: "conv3"  # Layer to use for concept discovery (conv3 has 64 filters) -- changed to conv4 for more direct output impact, but conv3 may yield richer concepts
   n_concepts: 6  # Number of concepts for window-based discovery (Variant A)
   
   # Variant C: GMM prototypes in CRP space (PRIMARY METHOD)
   n_prototypes: 4  # Number of prototypes per class (or use use_bic_selection)
-  use_bic_selection: true  # If true, use BIC to select optimal n_prototypes
-  bic_range: [1, 2, 3, 4, 5, 6]  # Range to search for optimal n_prototypes
+  use_bic_selection: false  # If true, use BIC to select optimal n_prototypes
+  bic_range: [1, 2, 3, 4]  # Range to search for optimal n_prototypes
   top_k_samples: 6  # Top-k samples per prototype for visualization
   gmm_covariance: "diag"  # Better for high-dimensional (64+ dims): 'diag', 'full', 'tied', 'spherical'
   gmm_n_init: 5  # Number of GMM initializations (increased from 1 for better convergence)
@@ -120,7 +120,7 @@ tcd:
 
 intervention:
   method: "suppress"  # suppress, amplify, or ablate
-  target_layer: "conv4"  # Use conv3 (64 filters) for richer concept space, or conv4 (128 filters) for more direct output impact
+  target_layer: "conv3"  # Use conv3 (64 filters) for richer concept space, or conv4 (128 filters) for more direct output impact
   concept_indices: []  # leave empty to auto-select
 
 evaluation:

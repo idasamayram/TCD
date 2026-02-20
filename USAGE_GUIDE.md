@@ -533,7 +533,7 @@ python scripts/evaluate_concepts.py \
 ## Troubleshooting
 
 ### Class Weights Not Applied
-- Ensure `use_class_weights: true` in config
+- Ensure `use_class_weights: true` in config --> changed to false as we do not need class weight for GMM fitting
 - Check that `VibrationDataset` has `weights` attribute
 - Verify dataset has at least 2 classes
 
