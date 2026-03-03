@@ -147,4 +147,13 @@ output:
   save_heatmaps: true
   save_features: true
 
+pruning:
+  keep_ratios: [0.9, 0.8, 0.7, 0.5, 0.3]
+  knee_threshold: 0.01  # Accuracy drop (fraction) that defines the knee point
 
+metadata:
+  output_dir: "results/metadata"
+
+output_analysis:
+  n_batches: 10        # Batches for gradient-based filter importance
+  batch_size: 32       # Batch size for gradient computation
