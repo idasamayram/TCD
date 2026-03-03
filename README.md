@@ -39,16 +39,16 @@ Frequency-band concepts using physics-informed filters:
 
 **Algorithm**: Apply bandpass filters to relevance heatmaps, compute energy per band, assign soft concept weights.
 
-#### **Variant B: Temporal Descriptors** (🚧 Skeleton)
+#### **Variant B: Temporal Descriptors** (✅ Fully Implemented)
 Extract temporal patterns via descriptors:
 - Slope statistics (rise/fall rates)
 - Peak/burst characteristics
 - Autocorrelation structure
 - Spectral density
 
-**TODO**: Implement descriptor extraction and clustering.
+**Algorithm**: Extract segments from relevance signals, compute multi-dimensional descriptors per segment, cluster with k-means or GMM to obtain temporal concept prototypes.
 
-#### **Variant C: Learned Clusters / PCX-Style** (🚧 Skeleton with working GMM)
+#### **Variant C: Learned Clusters / PCX-Style** (✅ Core Implemented)
 Direct PCX adaptation for 1D:
 1. Collect CRP concept relevance vectors ν^rel at chosen layer
 2. Filter to correctly predicted samples, fit GMM per class
@@ -56,7 +56,7 @@ Direct PCX adaptation for 1D:
 4. Assign new samples via log-likelihood
 5. Compute deviations Δ = ν - μ for interpretation
 
-**Status**: GMM core (`prototypes.py`) fully functional. TODO: Intervention pipeline, visualization.
+**Status**: GMM core (`prototypes.py`) fully functional. Intervention pipeline and full visualization available via `scripts/evaluate_concepts.py`.
 
 ## Installation
 
@@ -206,10 +206,11 @@ TCD/
 │   ├── evaluation.py             # Faithfulness, stability metrics
 │   └── variants/
 │       ├── filterbank.py         # Variant A (FULL)
-│       ├── temporal_descriptors.py  # Variant B (SKELETON)
-│       └── learned_clusters.py   # Variant C (SKELETON)
+│       ├── temporal_descriptors.py  # Variant B (FULL)
+│       └── learned_clusters.py   # Variant C (core)
 ├── scripts/
 │   ├── run_analysis.py           # Step 1: CRP feature collection
+│   ├── analyze_output_space.py   # Output space & decision axis visualisation
 │   ├── discover_concepts.py      # Step 2: TCD pipeline
 │   └── evaluate_concepts.py      # Step 3: Intervention + validation
 ├── notebooks/
@@ -218,6 +219,33 @@ TCD/
     ├── test_attribution.py       # Verify heatmap shape preservation
     └── test_concepts.py          # Verify concept extraction
 ```
+
+## Decision Axis Finding
+
+Analysis of the `CNN1D_Wide` output weights reveals that **w0 (OK) and w1 (NOK) are nearly perpendicular** (cosine similarity ≈ 0.041, angle ≈ 87.6°). This means the binary classification collapses to a **single decision axis**:
+
+```
+w_decision = w0 - w1
+score      = w_decision · h + (b0 - b1)
+```
+
+A positive score predicts **OK**; negative predicts **NOK**.
+
+To visualise and analyse this axis:
+
+```bash
+python scripts/analyze_output_space.py \
+    --model path/to/model.ckpt \
+    --data  path/to/data \
+    --output plots
+```
+
+**Outputs** (`plots/`):
+- `output_space.png` — 2D logit scatter with NOK plotted on top (visible despite class imbalance)
+- `decision_axis_analysis.png` — three-panel figure:
+  - (a) 1D score distribution for OK vs NOK with Fisher discriminant ratio and ROC-AUC
+  - (b) Top-k filter weights on the decision axis (which conv3 filters drive OK-vs-NOK)
+  - (c) Fixed output-space scatter (NOK visible)
 
 ## Critical Technical Details
 
@@ -289,11 +317,10 @@ MIT License — see LICENSE file for details.
 ## Contributing
 
 Contributions welcome! Priority areas:
-- Complete Variant B (temporal descriptors)
-- Complete Variant C intervention pipeline
 - End-to-end demo notebook
 - Additional evaluation metrics
 - Support for multi-class classification
+- Complete Variant C intervention pipeline
 
 ## Acknowledgments
 
@@ -304,4 +331,4 @@ Built on top of:
 
 ---
 
-**Status**: Core framework complete ✅ | Variant A complete ✅ | Variants B/C partial 🚧
+**Status**: Core framework complete ✅ | Variant A complete ✅ | Variant B complete ✅ | Variant C core complete ✅
