@@ -199,7 +199,8 @@ def run_variant_c(
     output_path: str,
     config: dict,
     layer_name: str = None,  # None = use config, otherwise override
-    data_path: str = None  # Path to dataset for loading class weights
+    data_path: str = None,  # Path to dataset for loading class weights
+    joint_gmm: bool = False  # If True, fit one GMM across both classes
 ):
     """
     Run Variant C: CRP-native concepts with GMM prototypes (PRIMARY METHOD).
@@ -394,13 +395,25 @@ def run_variant_c(
     )
     
     # Fit GMM prototypes
-    proto_desc = (f"per-class ({', '.join(f'class {k}: {v}' for k, v in n_prototypes.items())})"
-                  if isinstance(n_prototypes, dict) else f"{n_prototypes} per class")
-    print(f"\nFitting {proto_desc} prototypes with improved convergence settings...")
-    print(f"  Covariance type: {config['tcd'].get('gmm_covariance', 'diag')}")
-    print(f"  n_init: {config['tcd'].get('gmm_n_init', 5)}")
-    print(f"  max_iter: {config['tcd'].get('gmm_max_iter', 200)}")
-    tcd.fit(features, labels, outputs, class_weights=class_weights)
+    joint_gmm_result = None
+    if joint_gmm:
+        print("\nFitting JOINT GMM (class-agnostic) across both classes...")
+        use_bic = config['tcd'].get('use_bic_selection', False)
+        joint_gmm_result = tcd.prototype_discovery.fit_joint(
+            features, labels, use_bic_selection=use_bic
+        )
+        fitted_gmm, component_labels, purity_scores = joint_gmm_result
+        print("\nJoint GMM component summary:")
+        for i, (lbl, purity) in enumerate(zip(component_labels, purity_scores)):
+            print(f"  Component {i}: {lbl}  (purity={purity*100:.1f}%)")
+    else:
+        proto_desc = (f"per-class ({', '.join(f'class {k}: {v}' for k, v in n_prototypes.items())})"
+                      if isinstance(n_prototypes, dict) else f"{n_prototypes} per class")
+        print(f"\nFitting {proto_desc} prototypes with improved convergence settings...")
+        print(f"  Covariance type: {config['tcd'].get('gmm_covariance', 'diag')}")
+        print(f"  n_init: {config['tcd'].get('gmm_n_init', 5)}")
+        print(f"  max_iter: {config['tcd'].get('gmm_max_iter', 200)}")
+        tcd.fit(features, labels, outputs, class_weights=class_weights)
     
     # Step 3: Global window analysis (optional — disabled by default for Variant C)
     print("\n" + "="*80)
@@ -493,64 +506,74 @@ def run_variant_c(
     print("\n" + "="*80)
     print("Step 4: Interpret CRP Prototypes")
     print("="*80)
-    
-    from tcd.interpretation import ConceptInterpreter
-    
-    interpreter = ConceptInterpreter(
-        gmms=tcd.prototype_discovery.gmms,
-        features=features,
-        labels=labels,
-        layer_name=layer_name
-    )
 
-    # Add around line 475, before interpreter.interpret_prototypes()
-    from models.cnn1d_model import VibrationDataset
-    signals = None
-    if data_path and os.path.exists(data_path):
-        print("Loading raw signals for interpretation...")
-        temp_dataset = VibrationDataset(data_path)
-        # Stack all signals in same order as features (class 0 first, then class 1)
-        signals_list = []
-        for class_id in [0, 1]:
-            class_indices = [i for i, (_, label) in enumerate(temp_dataset) if label == class_id]
-            for idx in class_indices:
-                signals_list.append(temp_dataset[idx][0])
-        signals = torch.stack(signals_list)
-        print(f"  Loaded signals: {signals.shape}")
+    interpreter = None
+    interpretations = None
+    interpretation_export = {}
 
-    interpretations = interpreter.interpret_prototypes(
-        global_windows=global_windows or {},
-        heatmaps=heatmaps,
-        signals=signals,  # Could load raw signals if available,  but Now it actually has data
-        top_k_filters=10
-    )
-    
-    # Print interpretations
-    interpreter.print_interpretations(interpretations, verbose=True)
+    if joint_gmm:
+        print("  (Skipped — joint GMM mode does not use per-class interpreter)")
+    else:
+        from tcd.interpretation import ConceptInterpreter
+
+        interpreter = ConceptInterpreter(
+            gmms=tcd.prototype_discovery.gmms,
+            features=features,
+            labels=labels,
+            layer_name=layer_name
+        )
+
+        # Add around line 475, before interpreter.interpret_prototypes()
+        from models.cnn1d_model import VibrationDataset
+        signals = None
+        if data_path and os.path.exists(data_path):
+            print("Loading raw signals for interpretation...")
+            temp_dataset = VibrationDataset(data_path)
+            # Stack all signals in same order as features (class 0 first, then class 1)
+            signals_list = []
+            for class_id in [0, 1]:
+                class_indices = [i for i, (_, label) in enumerate(temp_dataset) if label == class_id]
+                for idx in class_indices:
+                    signals_list.append(temp_dataset[idx][0])
+            signals = torch.stack(signals_list)
+            print(f"  Loaded signals: {signals.shape}")
+
+        interpretations = interpreter.interpret_prototypes(
+            global_windows=global_windows or {},
+            heatmaps=heatmaps,
+            signals=signals,  # Could load raw signals if available,  but Now it actually has data
+            top_k_filters=10
+        )
+
+        # Print interpretations
+        interpreter.print_interpretations(interpretations, verbose=True)
     
     # Analyze prototypes per class (detailed statistics)
     print("\n" + "="*80)
     print("Step 5: Prototype Statistics")
     print("="*80)
-    
-    for class_id in [0, 1]:
-        class_name = "OK" if class_id == 0 else "NOK"
-        print(f"\n{class_name} (Class {class_id}) Prototypes:")
-        
-        # Get prototype samples
-        top_k = config['tcd'].get('top_k_samples', 6)
-        proto_samples = tcd.find_prototypes(class_id, top_k=top_k)
-        print(f"  Top-{top_k} representative samples identified per prototype")
-        
-        # Get coverage
-        coverage = tcd.get_coverage(class_id)
-        print(f"  Coverage per prototype: {coverage}")
-        
-        # Get assignments
-        class_mask = labels == class_id
-        class_features = features[class_mask]
-        assignments = tcd.assign_prototype(class_features, class_id)
-        print(f"  Assignment distribution: {np.bincount(assignments)}")
+
+    if joint_gmm:
+        print("  (Skipped — joint GMM mode; see component summary above)")
+    else:
+        for class_id in [0, 1]:
+            class_name = "OK" if class_id == 0 else "NOK"
+            print(f"\n{class_name} (Class {class_id}) Prototypes:")
+
+            # Get prototype samples
+            top_k = config['tcd'].get('top_k_samples', 6)
+            proto_samples = tcd.find_prototypes(class_id, top_k=top_k)
+            print(f"  Top-{top_k} representative samples identified per prototype")
+
+            # Get coverage
+            coverage = tcd.get_coverage(class_id)
+            print(f"  Coverage per prototype: {coverage}")
+
+            # Get assignments
+            class_mask = labels == class_id
+            class_features = features[class_mask]
+            assignments = tcd.assign_prototype(class_features, class_id)
+            print(f"  Assignment distribution: {np.bincount(assignments)}")
     
     # Step 7: Generate Visualizations
     print("\n" + "="*80)
@@ -563,42 +586,46 @@ def run_variant_c(
     # For visualizations, we need signals. For now we'll use heatmaps as proxy
     # In a full implementation, we'd load actual signals from dataset
     os.makedirs(output_path, exist_ok=True)
-    # Generate prototype comparison (OK vs NOK)
-    print("\nGenerating prototype comparison plot...")
-    try:
-        ok_prototypes = []
-        nok_prototypes = []
-        
-        for class_id in [0, 1]:
-            if class_id in tcd.prototype_discovery.gmms:
-                gmm = tcd.prototype_discovery.gmms[class_id]
-                for proto_idx in range(gmm.n_components):
-                    prototype_mean = gmm.means_[proto_idx]
-                    if class_id == 0:
-                        ok_prototypes.append(prototype_mean)
-                    else:
-                        nok_prototypes.append(prototype_mean)
-        
-        if ok_prototypes and nok_prototypes:
-            fig = plot_prototype_comparison(
-                ok_prototypes=ok_prototypes,
-                nok_prototypes=nok_prototypes,
-                filter_names=[f"F{i}" for i in range(features.shape[1])],
-                top_k=10
-            )
 
-            comparison_dir = Path(output_path)
-            comparison_dir.mkdir(parents=True, exist_ok=True)
-            comparison_path = str(comparison_dir / 'prototype_comparison.png')
+    if joint_gmm:
+        print("  (Per-class prototype comparison skipped in joint GMM mode)")
+    else:
+        # Generate prototype comparison (OK vs NOK)
+        print("\nGenerating prototype comparison plot...")
+        try:
+            ok_prototypes = []
+            nok_prototypes = []
+            
+            for class_id in [0, 1]:
+                if class_id in tcd.prototype_discovery.gmms:
+                    gmm = tcd.prototype_discovery.gmms[class_id]
+                    for proto_idx in range(gmm.n_components):
+                        prototype_mean = gmm.means_[proto_idx]
+                        if class_id == 0:
+                            ok_prototypes.append(prototype_mean)
+                        else:
+                            nok_prototypes.append(prototype_mean)
+            
+            if ok_prototypes and nok_prototypes:
+                fig = plot_prototype_comparison(
+                    ok_prototypes=ok_prototypes,
+                    nok_prototypes=nok_prototypes,
+                    filter_names=[f"F{i}" for i in range(features.shape[1])],
+                    top_k=10
+                )
 
-            # comparison_path = os.path.join(output_path, 'prototype_comparison.png')
-            fig.savefig(comparison_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f"  Saved prototype comparison to {comparison_path}")
-        else:
-            print("  Warning: Could not generate prototype comparison (missing prototypes)")
-    except Exception as e:
-        print(f"  Warning: Could not generate prototype comparison: {e}")
+                comparison_dir = Path(output_path)
+                comparison_dir.mkdir(parents=True, exist_ok=True)
+                comparison_path = str(comparison_dir / 'prototype_comparison.png')
+
+                # comparison_path = os.path.join(output_path, 'prototype_comparison.png')
+                fig.savefig(comparison_path, dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                print(f"  Saved prototype comparison to {comparison_path}")
+            else:
+                print("  Warning: Could not generate prototype comparison (missing prototypes)")
+        except Exception as e:
+            print(f"  Warning: Could not generate prototype comparison: {e}")
     
     # Generate prototype galleries for each class
     # Note: This requires loading actual signals/heatmaps for closest samples
@@ -644,63 +671,93 @@ def run_variant_c(
     except Exception as e:
         print(f"  Warning: Could not generate UMAP visualization: {e}")
 
-    # Concept-Prototype Matrix (PCX Figure 5 equivalent)
-    print("\nGenerating concept-prototype matrices...")
-    try:
-        from tcd.visualization import plot_concept_prototype_matrix
+    # Joint-GMM UMAP (only when --joint-gmm was used)
+    if joint_gmm and joint_gmm_result is not None:
+        print("\nGenerating joint-GMM UMAP visualization...")
+        try:
+            from tcd.visualization import plot_umap_prototypes
 
-        for class_id in [0, 1]:
-            if class_id not in tcd.prototype_discovery.gmms:
-                continue
-            gmm = tcd.prototype_discovery.gmms[class_id]
-            cov_pct = None
-            try:
-                class_mask = labels == class_id
-                assignments = tcd.assign_prototype(features[class_mask], class_id)
-                counts = np.bincount(assignments, minlength=gmm.n_components)
-                cov_pct = 100.0 * counts / (counts.sum() + 1e-9)
-            except Exception:
-                pass
+            fitted_gmm, component_labels, purity_scores = joint_gmm_result
+            features_np = features.numpy() if hasattr(features, 'numpy') else np.array(features)
+            labels_np = labels.numpy() if hasattr(labels, 'numpy') else np.array(labels)
+            joint_assignments = fitted_gmm.predict(features_np)
 
-            fig_mat = plot_concept_prototype_matrix(
-                gmm_means=gmm.means_,
-                class_id=class_id,
-                n_top_concepts=config['tcd'].get('top_k_samples', 5),
-                coverage_pct=cov_pct,
-                filter_names=[f"F{i}" for i in range(features.shape[1])]
+            # Build gmm_means_dict keyed by component index (use dummy class 0)
+            gmm_means_joint = {0: fitted_gmm.means_}
+
+            fig_j = plot_umap_prototypes(
+                features=features_np,
+                labels=labels_np,
+                prototype_assignments=joint_assignments,
+                gmm_means=gmm_means_joint
             )
-            mat_path = os.path.join(output_path, f'concept_prototype_matrix_class{class_id}.png')
-            fig_mat.savefig(mat_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_mat)
-            print(f"  Saved concept-prototype matrix to {mat_path}")
-    except Exception as e:
-        print(f"  Warning: Could not generate concept-prototype matrix: {e}")
+            j_path = os.path.join(output_path, 'umap_joint_gmm.png')
+            fig_j.savefig(j_path, dpi=150, bbox_inches='tight')
+            plt.close(fig_j)
+            print(f"  Saved joint-GMM UMAP to {j_path}")
+        except Exception as e:
+            print(f"  Warning: Could not generate joint-GMM UMAP: {e}")
+
+
+    # Concept-Prototype Matrix (PCX Figure 5 equivalent)
+    if not joint_gmm:
+        print("\nGenerating concept-prototype matrices...")
+        try:
+            from tcd.visualization import plot_concept_prototype_matrix
+
+            for class_id in [0, 1]:
+                if class_id not in tcd.prototype_discovery.gmms:
+                    continue
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                cov_pct = None
+                try:
+                    class_mask = labels == class_id
+                    assignments = tcd.assign_prototype(features[class_mask], class_id)
+                    counts = np.bincount(assignments, minlength=gmm.n_components)
+                    cov_pct = 100.0 * counts / (counts.sum() + 1e-9)
+                except Exception:
+                    pass
+
+                fig_mat = plot_concept_prototype_matrix(
+                    gmm_means=gmm.means_,
+                    class_id=class_id,
+                    n_top_concepts=config['tcd'].get('top_k_samples', 5),
+                    coverage_pct=cov_pct,
+                    filter_names=[f"F{i}" for i in range(features.shape[1])]
+                )
+                mat_path = os.path.join(output_path, f'concept_prototype_matrix_class{class_id}.png')
+                fig_mat.savefig(mat_path, dpi=150, bbox_inches='tight')
+                plt.close(fig_mat)
+                print(f"  Saved concept-prototype matrix to {mat_path}")
+        except Exception as e:
+            print(f"  Warning: Could not generate concept-prototype matrix: {e}")
 
     # Attribution graph (one per prototype per class)
-    print("\nGenerating attribution graphs...")
-    try:
-        from tcd.visualization import plot_attribution_graph
+    if not joint_gmm:
+        print("\nGenerating attribution graphs...")
+        try:
+            from tcd.visualization import plot_attribution_graph
 
-        top_k_attr = config['tcd'].get('top_k_samples', 5)
-        for class_id in [0, 1]:
-            if class_id not in tcd.prototype_discovery.gmms:
-                continue
-            gmm = tcd.prototype_discovery.gmms[class_id]
-            for proto_idx in range(gmm.n_components):
-                fig_attr = plot_attribution_graph(
-                    prototype_mean=gmm.means_[proto_idx],
-                    class_id=class_id,
-                    top_k=top_k_attr
-                )
-                attr_path = os.path.join(
-                    output_path,
-                    f'attribution_graph_class{class_id}_proto{proto_idx}.png'
-                )
-                fig_attr.savefig(attr_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_attr)
-                print(f"  Saved attribution graph to {attr_path}")
-    except Exception as e:
-        print(f"  Warning: Could not generate attribution graphs: {e}")
+            top_k_attr = config['tcd'].get('top_k_samples', 5)
+            for class_id in [0, 1]:
+                if class_id not in tcd.prototype_discovery.gmms:
+                    continue
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                for proto_idx in range(gmm.n_components):
+                    fig_attr = plot_attribution_graph(
+                        prototype_mean=gmm.means_[proto_idx],
+                        class_id=class_id,
+                        top_k=top_k_attr
+                    )
+                    attr_path = os.path.join(
+                        output_path,
+                        f'attribution_graph_class{class_id}_proto{proto_idx}.png'
+                    )
+                    fig_attr.savefig(attr_path, dpi=150, bbox_inches='tight')
+                    plt.close(fig_attr)
+                    print(f"  Saved attribution graph to {attr_path}")
+        except Exception as e:
+            print(f"  Warning: Could not generate attribution graphs: {e}")
     
     # Save results
     print("\n" + "="*80)
@@ -715,10 +772,11 @@ def run_variant_c(
     print(f"  Saved TCD model")
     
     # Save interpretations
-    interpretation_export = interpreter.export_to_dict(interpretations)
-    with open(os.path.join(output_path, 'interpretations.pkl'), 'wb') as f:
-        pickle.dump(interpretation_export, f)
-    print(f"  Saved interpretations")
+    if interpreter is not None and interpretations is not None:
+        interpretation_export = interpreter.export_to_dict(interpretations)
+        with open(os.path.join(output_path, 'interpretations.pkl'), 'wb') as f:
+            pickle.dump(interpretation_export, f)
+        print(f"  Saved interpretations")
     
     # Save global windows if available
     if global_windows:
@@ -742,8 +800,14 @@ def run_variant_c(
         'outputs': outputs.numpy(),
         'global_windows': global_windows,
         'window_analysis': window_analysis_results,
-        'interpretations': interpretation_export
+        'interpretations': interpretation_export,
+        'joint_gmm': joint_gmm,
     }
+
+    if joint_gmm and joint_gmm_result is not None:
+        fitted_gmm, component_labels, purity_scores = joint_gmm_result
+        results['joint_gmm_component_labels'] = component_labels
+        results['joint_gmm_purity_scores'] = purity_scores
     
     with open(os.path.join(output_path, 'results.pkl'), 'wb') as f:
         pickle.dump(results, f)
@@ -1058,6 +1122,8 @@ def main():
                        help='Use window-based concept discovery for Variant A (default: filterbank)')
     parser.add_argument('--data', type=str, default=None,
                        help='Path to data directory (for loading class weights in Variant C)')
+    parser.add_argument('--joint-gmm', action='store_true',
+                       help='Fit one GMM across both classes instead of per-class (Variant C only)')
     
     args = parser.parse_args()
     
@@ -1073,7 +1139,11 @@ def main():
     elif args.variant == 'B':
         run_variant_b(args.features, args.output, config)
     elif args.variant == 'C':
-        run_variant_c(args.features, args.output, config, layer_name=args.layer, data_path=data_path)
+        run_variant_c(
+            args.features, args.output, config,
+            layer_name=args.layer, data_path=data_path,
+            joint_gmm=args.joint_gmm,
+        )
     elif args.variant == 'D':
         run_variant_d(args.features, args.output, config, data_path=data_path)
 

@@ -440,6 +440,113 @@ class TemporalPrototypeDiscovery:
         
         return optimal_n, scores
 
+    def fit_joint(
+        self,
+        features: torch.Tensor,
+        labels: torch.Tensor,
+        use_bic_selection: bool = False,
+        purity_threshold: float = 0.70,
+    ) -> Tuple[GaussianMixture, List[str], np.ndarray]:
+        """
+        Fit a single GMM across both classes (joint / class-agnostic GMM).
+
+        After fitting, each component is labelled as ``"OK-dominant"``,
+        ``"NOK-dominant"``, or ``"mixed"`` based on class purity.
+
+        Args:
+            features: Concept relevance vectors of shape ``(N, n_concepts)``.
+            labels: True class labels of shape ``(N,)`` (0 = OK, 1 = NOK).
+            use_bic_selection: If ``True``, use BIC to select the optimal
+                number of components from the range stored in
+                ``self.n_prototypes`` (if it is an int, the range is
+                ``[1 … n_prototypes]``; if a dict, the max value is used).
+            purity_threshold: Fraction required for a component to be
+                considered dominant (default 0.70 → 70 %).
+
+        Returns:
+            Tuple of:
+            - ``gmm``: Fitted :class:`~sklearn.mixture.GaussianMixture`.
+            - ``component_labels``: List of label strings, one per component.
+            - ``purity_scores``: Array of shape ``(n_components,)`` with the
+              fraction of the majority class in each component.
+        """
+        features_np = features.cpu().numpy()
+        labels_np = labels.cpu().numpy()
+
+        # Determine number of components
+        if use_bic_selection:
+            if isinstance(self.n_prototypes, dict):
+                max_n = max(self.n_prototypes.values())
+            else:
+                max_n = int(self.n_prototypes)
+            n_components, _ = self.select_optimal_n_prototypes(
+                features,
+                min_prototypes=1,
+                max_prototypes=max(max_n, 1),
+                covariance_type=self.covariance_type,
+                n_init=self.n_init,
+                max_iter=self.max_iter,
+                random_state=self.random_state,
+            )
+        else:
+            if isinstance(self.n_prototypes, dict):
+                n_components = max(self.n_prototypes.values())
+            else:
+                n_components = int(self.n_prototypes)
+
+        print(f"\nFitting joint GMM with {n_components} components on all classes...")
+        gmm = GaussianMixture(
+            n_components=n_components,
+            covariance_type=self.covariance_type,
+            n_init=self.n_init,
+            max_iter=self.max_iter,
+            random_state=self.random_state,
+            init_params='kmeans',
+            verbose=2,
+        )
+        gmm.fit(features_np)
+
+        # Assign each sample to a component
+        assignments = gmm.predict(features_np)
+
+        # Compute class purity per component
+        component_labels: List[str] = []
+        purity_scores = np.zeros(n_components)
+        label_names = {0: 'OK', 1: 'NOK'}
+
+        for comp in range(n_components):
+            mask = assignments == comp
+            if mask.sum() == 0:
+                component_labels.append('empty')
+                purity_scores[comp] = 0.0
+                continue
+            comp_labels = labels_np[mask]
+            counts = np.bincount(comp_labels, minlength=2)
+            total = counts.sum()
+            pct = counts / total
+            majority_class = int(np.argmax(pct))
+            majority_pct = float(pct[majority_class])
+            purity_scores[comp] = majority_pct
+
+            if majority_pct >= purity_threshold:
+                component_labels.append(f'{label_names[majority_class]}-dominant')
+            else:
+                component_labels.append('mixed')
+
+            print(
+                f"  Component {comp}: "
+                f"OK={pct[0]*100:.1f}%  NOK={pct[1]*100:.1f}%  "
+                f"→ {component_labels[-1]}"
+            )
+
+        # Store for later queries
+        self._joint_gmm = gmm
+        self._joint_assignments = assignments
+        self._joint_component_labels = component_labels
+        self._joint_purity_scores = purity_scores
+
+        return gmm, component_labels, purity_scores
+
 
 if __name__ == "__main__":
     # Test prototype discovery on synthetic data

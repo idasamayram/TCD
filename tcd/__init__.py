@@ -37,6 +37,9 @@ from .robustness import (
     robustness_deviation_analysis
 )
 from .interpretation import ConceptInterpreter, extract_sample_features
+from .pruning import RelevancePruner
+from .metadata import MetadataAnalyzer
+from .output_analysis import OutputAnalyzer
 
 __version__ = '0.1.0'
 
@@ -97,4 +100,13 @@ __all__ = [
     # Interpretation
     'ConceptInterpreter',
     'extract_sample_features',
+
+    # Pruning
+    'RelevancePruner',
+
+    # Metadata
+    'MetadataAnalyzer',
+
+    # Output analysis
+    'OutputAnalyzer',
 ]
