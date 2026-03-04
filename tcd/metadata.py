@@ -197,43 +197,29 @@ class MetadataAnalyzer:
     # Report
     # ------------------------------------------------------------------
 
-    def generate_report(
-        self,
-        metadata_df: pd.DataFrame,
-        n_prototypes_per_class: Optional[Dict[int, int]] = None,
-        class_names: Optional[Dict[int, str]] = None,
-    ) -> None:
+    def generate_report(self, metadata_df: pd.DataFrame) -> None:
         """
         Print a human-readable summary of prototype metadata.
 
         Args:
             metadata_df: DataFrame from :meth:`parse_filenames`.
-            n_prototypes_per_class: Optional mapping of class_id → number of
-                prototypes for that class.  When provided, prototype IDs are
-                displayed as class-contextual names such as "OK-Proto-0".
-            class_names: Optional mapping of class_id → display name.
-                Defaults to ``{0: 'OK', 1: 'NOK'}``.
         """
         analysis = self.analyze_prototype_metadata(metadata_df)
-        if class_names is None:
-            class_names = {0: 'OK', 1: 'NOK'}
+        label_names = {0: 'OK', 1: 'NOK'}
 
         print("\n" + "=" * 60)
         print("PROTOTYPE METADATA REPORT")
         print("=" * 60)
 
         for proto_id, info in sorted(analysis.items()):
-            display_name = self._prototype_display_name(
-                proto_id, n_prototypes_per_class, class_names
-            )
             # Dominant class label
             label_dist = info['label_distribution']
             dominant_label_id = max(label_dist, key=label_dist.get)
-            dominant_label = class_names.get(dominant_label_id, str(dominant_label_id))
+            dominant_label = label_names.get(dominant_label_id, str(dominant_label_id))
             dominant_pct = label_dist[dominant_label_id]
 
             print(
-                f"\n{display_name} ({dominant_label}, "
+                f"\nPrototype {proto_id} ({dominant_label}, "
                 f"{info['pct_of_total']:.0f}% of samples):"
             )
 
@@ -268,36 +254,6 @@ class MetadataAnalyzer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _prototype_display_name(
-        proto_id: int,
-        n_prototypes_per_class: Optional[Dict[int, int]] = None,
-        class_names: Optional[Dict[int, str]] = None,
-    ) -> str:
-        """Map an offset-based prototype ID to a class-contextual display name.
-
-        Args:
-            proto_id: Offset-based global prototype index.
-            n_prototypes_per_class: Mapping of class_id → number of prototypes.
-            class_names: Mapping of class_id → display name.
-
-        Returns:
-            A string like "OK-Proto-0" or "Prototype 3".
-        """
-        if not n_prototypes_per_class:
-            return f"Prototype {proto_id}"
-        if class_names is None:
-            class_names = {0: 'OK', 1: 'NOK'}
-        offset = 0
-        for class_id in sorted(n_prototypes_per_class.keys()):
-            n_comps = n_prototypes_per_class[class_id]
-            if proto_id < offset + n_comps:
-                local_id = proto_id - offset
-                cname = class_names.get(class_id, str(class_id))
-                return f"{cname}-Proto-{local_id}"
-            offset += n_comps
-        return f"Prototype {proto_id}"
-
-    @staticmethod
     def _chi2_test(df: pd.DataFrame, col: str, proto_id: int) -> Optional[Dict]:
         """Binary contingency table: 'this prototype' vs 'all others'."""
         try:
@@ -319,15 +275,11 @@ class MetadataAnalyzer:
         filename: str,
     ) -> None:
         """Create and save a stacked bar chart: prototypes on x-axis, col as stacks."""
-        if df.empty:
-            return
         pivot = (
             df.groupby(['prototype_assignment', col])
             .size()
             .unstack(fill_value=0)
         )
-        if pivot.empty:
-            return
         pivot = pivot.apply(pd.to_numeric, errors='coerce').fillna(0)  # ensure numeric
         pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
         pivot_pct = pivot_pct.astype(float)
@@ -346,16 +298,11 @@ class MetadataAnalyzer:
     @staticmethod
     def _operation_heatmap(df: pd.DataFrame, filename: str) -> None:
         """Create and save a heatmap of prototype × operation sample counts."""
-        if df.empty:
-            return
         pivot = (
             df.groupby(['prototype_assignment', 'operation'])
             .size()
             .unstack(fill_value=0)
         )
-        if pivot.empty:
-            return
-        pivot = pivot.apply(pd.to_numeric, errors='coerce').fillna(0)  # ensure numeric
 
         fig, ax = plt.subplots(
             figsize=(max(6, pivot.shape[1] * 0.7), max(4, pivot.shape[0] * 0.7))
