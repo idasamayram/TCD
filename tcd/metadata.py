@@ -171,6 +171,10 @@ class MetadataAnalyzer:
         os.makedirs(output_dir, exist_ok=True)
         df = metadata_df[metadata_df['prototype_assignment'] >= 0].copy()
 
+        if df.empty:
+            print("  Warning: no samples with valid prototype assignments; skipping plots.")
+            return
+
         # --- stacked bar: prototype × machine ---
         self._stacked_bar(
             df,
@@ -284,6 +288,10 @@ class MetadataAnalyzer:
         pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
         pivot_pct = pivot_pct.astype(float)
 
+        if pivot_pct.empty or pivot_pct.shape[1] == 0:
+            print(f"  Warning: no data to plot for '{col}'; skipping {filename}")
+            return
+
         fig, ax = plt.subplots(figsize=(max(6, len(pivot) * 1.2), 4))
         pivot_pct.plot(kind='bar', stacked=True, ax=ax, colormap='tab10')
         ax.set_xlabel('Prototype')
@@ -303,6 +311,10 @@ class MetadataAnalyzer:
             .size()
             .unstack(fill_value=0)
         )
+
+        if pivot.empty or pivot.shape[1] == 0:
+            print(f"  Warning: no data for operation heatmap; skipping {filename}")
+            return
 
         fig, ax = plt.subplots(
             figsize=(max(6, pivot.shape[1] * 0.7), max(4, pivot.shape[0] * 0.7))

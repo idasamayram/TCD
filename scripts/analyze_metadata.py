@@ -80,19 +80,34 @@ def main():
             with open(tcd_model_path, 'rb') as f:
                 tcd = pickle.load(f)
             features_t = torch.from_numpy(features).float()
-            labels_t = torch.from_numpy(labels_arr).long()
             prototype_assignments = np.full(len(features), -1, dtype=int)
-            for class_id in [0, 1]:
-                class_mask = labels_arr == class_id
-                if class_id in tcd.prototype_discovery.gmms:
-                    gmm = tcd.prototype_discovery.gmms[class_id]
-                    class_feat = features_t[class_mask]
-                    assigns = gmm.predict(class_feat.numpy())
-                    # Offset prototype IDs by class: assumes equal n_components per class
-                    prototype_assignments[class_mask] = (
-                        assigns + class_id * gmm.n_components
-                    )
-            print(f"  Loaded prototype assignments from tcd_model.pkl")
+
+            # Check for joint-GMM first (single GMM fitted on all samples)
+            joint_gmm = results.get('joint_gmm') or getattr(
+                tcd.prototype_discovery, 'joint_gmm', None
+            )
+            if joint_gmm is not None:
+                prototype_assignments = joint_gmm.predict(features).astype(int)
+                print(f"  Loaded prototype assignments from joint GMM")
+            else:
+                # Per-class GMMs
+                found_per_class_gmm = False
+                for class_id in [0, 1]:
+                    class_mask = labels_arr == class_id
+                    if class_id in tcd.prototype_discovery.gmms:
+                        gmm = tcd.prototype_discovery.gmms[class_id]
+                        class_feat = features_t[class_mask]
+                        assigns = gmm.predict(class_feat.numpy())
+                        # Offset prototype IDs by class: assumes equal n_components per class
+                        prototype_assignments[class_mask] = (
+                            assigns + class_id * gmm.n_components
+                        )
+                        found_per_class_gmm = True
+                if found_per_class_gmm:
+                    print(f"  Loaded prototype assignments from tcd_model.pkl")
+                else:
+                    print(f"  Warning: tcd_model has neither joint_gmm nor per-class gmms")
+                    prototype_assignments = None
         except Exception as e:
             print(f"  Warning: Could not reconstruct assignments: {e}")
             prototype_assignments = None
