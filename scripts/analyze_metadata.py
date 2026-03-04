@@ -155,6 +155,40 @@ def main():
         traceback.print_exc()
 
     # ------------------------------------------------------------------
+    # UMAP colored by metadata + prototypes
+    print("\nGenerating combined metadata + prototype UMAP...")
+    try:
+        from tcd.visualization import plot_umap_metadata_with_prototypes
+
+        # Build gmm_means_dict if available
+        gmm_means_dict = None
+        try:
+            with open(tcd_model_path, 'rb') as f:
+                tcd_reload = pickle.load(f)
+            gmm_means_dict = {}
+            for class_id in [0, 1]:
+                if class_id in tcd_reload.prototype_discovery.gmms:
+                    gmm_means_dict[class_id] = tcd_reload.prototype_discovery.gmms[class_id].means_
+        except Exception:
+            gmm_means_dict = None
+
+        fig = plot_umap_metadata_with_prototypes(
+            features=features_np,
+            labels=labels_np,
+            prototype_assignments=prototype_assignments,
+            metadata_df=metadata_df,
+            gmm_means=gmm_means_dict,
+        )
+        combined_path = os.path.join(args.output, 'umap_metadata_prototypes.png')
+        fig.savefig(combined_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved combined UMAP to {combined_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate combined UMAP: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # ------------------------------------------------------------------
     analyzer.generate_report(metadata_df)
 
     # Save metadata DataFrame

@@ -1390,6 +1390,200 @@ def plot_umap_metadata(
     return fig
 
 
+def plot_umap_metadata_with_prototypes(
+    features: np.ndarray,
+    labels: np.ndarray,
+    prototype_assignments: np.ndarray,
+    metadata_df: Any,
+    gmm_means: Optional[Dict[int, np.ndarray]] = None,
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    figsize: Tuple[int, int] = (24, 14),
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    random_state: int = 42,
+) -> plt.Figure:
+    """
+    Combined UMAP visualization showing metadata and prototype assignments.
+
+    Creates a 6-panel figure (2 rows × 3 columns):
+      Row 1: By Class | By Machine | By Operation
+      Row 2: By Prototype | By Tool Type | By Speed (Hz)
+
+    Args:
+        features: CRV feature matrix of shape (N, n_filters).
+        labels: Class labels of shape (N,).
+        prototype_assignments: Prototype index per sample of shape (N,).
+        metadata_df: DataFrame with columns 'machine', 'operation',
+            'tool_type', and 'speed_hz'.
+        gmm_means: Optional dict mapping class_id -> array (n_proto, n_filters)
+            of GMM component means.
+        class_names: Mapping from class ID to display name.
+        figsize: Figure size.
+        n_neighbors: UMAP n_neighbors parameter.
+        min_dist: UMAP min_dist parameter.
+        random_state: Random seed for reproducibility.
+
+    Returns:
+        Matplotlib figure with six scatter plots sharing the same UMAP embedding.
+    """
+    # --- Dimensionality reduction ---
+    try:
+        import umap
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            random_state=random_state
+        )
+        method_name = "UMAP"
+    except ImportError:
+        from sklearn.decomposition import PCA
+        reducer = PCA(n_components=2, random_state=random_state)
+        method_name = "PCA"
+
+    all_points = features
+    if gmm_means is not None:
+        means_list = [m for m in gmm_means.values()]
+        if means_list:
+            all_points = np.vstack([features] + means_list)
+
+    embedding = reducer.fit_transform(all_points)
+    feat_emb = embedding[:len(features)]
+
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    fig.suptitle(
+        f"CRV Space — {method_name} Colored by Metadata & Prototypes",
+        fontsize=14, fontweight='bold'
+    )
+
+    # --- Panel 1 (top-left): By Class ---
+    ax = axes[0, 0]
+    class_colors = {0: 'green', 1: 'red'}
+    for cid, cname in class_names.items():
+        mask = labels == cid
+        if mask.sum() > 0:
+            ax.scatter(
+                feat_emb[mask, 0], feat_emb[mask, 1],
+                c=class_colors.get(cid, 'blue'), label=cname,
+                alpha=0.5, s=20, edgecolors='none'
+            )
+    ax.set_title("By Class")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2)
+
+    # --- Panel 2 (top-middle): By Machine ---
+    ax = axes[0, 1]
+    machines = metadata_df['machine'].values
+    unique_machines = sorted(set(m for m in machines if m != 'unknown'))
+    machine_cmap = plt.get_cmap('Set1')
+    for i, machine in enumerate(unique_machines):
+        mask = machines == machine
+        ax.scatter(
+            feat_emb[mask, 0], feat_emb[mask, 1],
+            color=machine_cmap(i), label=machine,
+            alpha=0.5, s=20, edgecolors='none'
+        )
+    ax.set_title("By Machine")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2)
+
+    # --- Panel 3 (top-right): By Operation ---
+    ax = axes[0, 2]
+    operations = metadata_df['operation'].values
+    unique_ops = sorted(set(o for o in operations if o != 'unknown'))
+    op_cmap = plt.get_cmap('tab20')
+    for i, op in enumerate(unique_ops):
+        mask = operations == op
+        ax.scatter(
+            feat_emb[mask, 0], feat_emb[mask, 1],
+            color=op_cmap(i % 20), label=op,
+            alpha=0.5, s=20, edgecolors='none'
+        )
+    ax.set_title("By Operation")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=7, ncol=2)
+
+    # --- Panel 4 (bottom-left): By Prototype ---
+    ax = axes[1, 0]
+    unique_protos = np.unique(prototype_assignments[prototype_assignments >= 0])
+    proto_cmap = plt.get_cmap('tab10')
+    for pi in unique_protos:
+        mask = prototype_assignments == pi
+        ax.scatter(
+            feat_emb[mask, 0], feat_emb[mask, 1],
+            c=[proto_cmap(int(pi) % 10)],
+            label=f"Proto {pi}", alpha=0.6, s=25, edgecolors='none'
+        )
+    if gmm_means is not None:
+        offset = len(features)
+        for cid, means in gmm_means.items():
+            for pi in range(len(means)):
+                mean_emb = embedding[offset]
+                offset += 1
+                ax.scatter(
+                    mean_emb[0], mean_emb[1],
+                    c='black', marker='*', s=200, zorder=5,
+                    label=f"μ class{cid}" if pi == 0 else None,
+                    edgecolors='black'
+                )
+    ax.set_title("By Prototype Assignment")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=8, ncol=2)
+
+    # --- Panel 5 (bottom-middle): By Tool Type ---
+    ax = axes[1, 1]
+    tool_type_colors = {
+        'Step Drill': '#1f77b4',
+        'Drill': '#ff7f0e',
+        'Straight Flute': '#2ca02c',
+        'T-Slot Cutter': '#d62728',
+    }
+    if 'tool_type' in metadata_df.columns:
+        tool_types = metadata_df['tool_type'].values
+        unique_tools = sorted(set(t for t in tool_types if t != 'unknown'))
+        default_cmap = plt.get_cmap('tab10')
+        for i, tt in enumerate(unique_tools):
+            mask = tool_types == tt
+            color = tool_type_colors.get(tt, default_cmap(i % 10))
+            ax.scatter(
+                feat_emb[mask, 0], feat_emb[mask, 1],
+                color=color, label=tt,
+                alpha=0.5, s=20, edgecolors='none'
+            )
+    ax.set_title("By Tool Type")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=8)
+
+    # --- Panel 6 (bottom-right): By Speed (Hz) ---
+    ax = axes[1, 2]
+    if 'speed_hz' in metadata_df.columns:
+        speeds = metadata_df['speed_hz'].values.astype(float)
+        known_mask = speeds != -1
+        if known_mask.sum() > 0:
+            sc = ax.scatter(
+                feat_emb[known_mask, 0], feat_emb[known_mask, 1],
+                c=speeds[known_mask], cmap='viridis',
+                alpha=0.5, s=20, edgecolors='none'
+            )
+            plt.colorbar(sc, ax=ax, label='Speed (Hz)')
+        unknown_speed_mask = ~known_mask
+        if unknown_speed_mask.sum() > 0:
+            ax.scatter(
+                feat_emb[unknown_speed_mask, 0], feat_emb[unknown_speed_mask, 1],
+                color='gray', alpha=0.3, s=20, edgecolors='none', label='unknown'
+            )
+    ax.set_title("By Speed (Hz)")
+
+    for row_axes in axes:
+        for ax in row_axes:
+            ax.set_xlabel(f"{method_name} 1")
+            ax.set_ylabel(f"{method_name} 2")
+            ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+
 
 def plot_concept_prototype_matrix(
     gmm_means: np.ndarray,
