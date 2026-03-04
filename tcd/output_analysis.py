@@ -373,7 +373,7 @@ class OutputAnalyzer:
         dataset: torch.utils.data.Dataset,
         output_dir: str,
         device: str = 'cpu',
-        max_samples: int = 1000,
+        max_samples: int = 10000,
     ) -> None:
         """Project samples to logit space and save scatter plot."""
         loader = torch.utils.data.DataLoader(
