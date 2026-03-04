@@ -24,6 +24,24 @@ _FILENAME_RE = re.compile(
     r'^(?P<machine>M\d+)_[A-Za-z]+_\d{4}_(?P<operation>OP\d+)_(?P<sample_id>[^_]+)_window_(?P<window_id>\d+)'
 )
 
+OPERATION_METADATA = {
+    'OP00': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 100, 'duration_s': 132},
+    'OP01': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 100, 'duration_s': 29},
+    'OP02': {'tool_type': 'Drill',          'speed_hz': 200, 'feed_mm_s': 50,  'duration_s': 42},
+    'OP03': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 330, 'duration_s': 77},
+    'OP04': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 100, 'duration_s': 64},
+    'OP05': {'tool_type': 'Step Drill',     'speed_hz': 200, 'feed_mm_s': 50,  'duration_s': 18},
+    'OP06': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 91},
+    'OP07': {'tool_type': 'Step Drill',     'speed_hz': 200, 'feed_mm_s': 50,  'duration_s': 24},
+    'OP08': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 37},
+    'OP09': {'tool_type': 'Straight Flute', 'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 102},
+    'OP10': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 45},
+    'OP11': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 59},
+    'OP12': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 50,  'duration_s': 46},
+    'OP13': {'tool_type': 'T-Slot Cutter',  'speed_hz': 75,  'feed_mm_s': 25,  'duration_s': 32},
+    'OP14': {'tool_type': 'Step Drill',     'speed_hz': 250, 'feed_mm_s': 100, 'duration_s': 34},
+}
+
 
 class MetadataAnalyzer:
     """
@@ -77,11 +95,16 @@ class MetadataAnalyzer:
                 if prototype_assignments is not None
                 else -1
             )
+            op_params = OPERATION_METADATA.get(operation, {})
             rows.append({
                 'sample_idx': idx,
                 'filename': str(fp),
                 'machine': machine,
                 'operation': operation,
+                'tool_type': op_params.get('tool_type', 'unknown'),
+                'speed_hz': op_params.get('speed_hz', -1),
+                'feed_mm_s': op_params.get('feed_mm_s', -1),
+                'duration_s': op_params.get('duration_s', -1),
                 'sample_id': sample_id,
                 'window_id': window_id,
                 'label': int(label),
@@ -127,6 +150,10 @@ class MetadataAnalyzer:
             operation_dist = (
                 group['operation'].value_counts(normalize=True).mul(100).round(1).to_dict()
             )
+            tool_type_dist = (
+                group['tool_type'].value_counts(normalize=True).mul(100).round(1).to_dict()
+                if 'tool_type' in group.columns else {}
+            )
             label_dist = (
                 group['label'].value_counts(normalize=True).mul(100).round(1).to_dict()
             )
@@ -141,6 +168,7 @@ class MetadataAnalyzer:
                 'label_distribution': label_dist,
                 'machine_distribution': machine_dist,
                 'operation_distribution': operation_dist,
+                'tool_type_distribution': tool_type_dist,
                 'chi2_machine': chi2_machine,
                 'chi2_operation': chi2_operation,
             }
@@ -243,6 +271,14 @@ class MetadataAnalyzer:
             if other_pct > 0:
                 op_str += f", other ({other_pct:.0f}%)"
             print(f"  Operations: {op_str}")
+
+            # Tool types
+            tool_dist = info.get('tool_type_distribution', {})
+            if tool_dist:
+                tool_str = ', '.join(
+                    f"{t} ({p:.0f}%)" for t, p in sorted(tool_dist.items(), key=lambda x: -x[1])
+                )
+                print(f"  Tool types: {tool_str}")
 
             # Chi-squared hints
             chi2_op = info['chi2_operation']
