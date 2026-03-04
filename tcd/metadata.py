@@ -280,7 +280,9 @@ class MetadataAnalyzer:
             .size()
             .unstack(fill_value=0)
         )
+        pivot = pivot.apply(pd.to_numeric, errors='coerce').fillna(0)  # ensure numeric
         pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
+        pivot_pct = pivot_pct.astype(float)
 
         fig, ax = plt.subplots(figsize=(max(6, len(pivot) * 1.2), 4))
         pivot_pct.plot(kind='bar', stacked=True, ax=ax, colormap='tab10')

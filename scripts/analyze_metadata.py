@@ -20,6 +20,7 @@ import os
 import pickle
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from models.cnn1d_model import VibrationDataset
 from tcd.metadata import MetadataAnalyzer
@@ -114,6 +115,29 @@ def main():
     # ------------------------------------------------------------------
     print("\nGenerating metadata plots...")
     analyzer.plot_prototype_metadata(metadata_df, args.output)
+
+    # ------------------------------------------------------------------
+    # UMAP colored by metadata
+    print("\nGenerating UMAP colored by metadata...")
+    try:
+        from tcd.visualization import plot_umap_metadata
+
+        features_np = features.astype(np.float32) if not isinstance(features, np.ndarray) else features
+        labels_np = labels_arr.astype(int)
+
+        fig = plot_umap_metadata(
+            features=features_np,
+            labels=labels_np,
+            metadata_df=metadata_df,
+        )
+        umap_path = os.path.join(args.output, 'umap_metadata.png')
+        fig.savefig(umap_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved metadata UMAP to {umap_path}")
+    except Exception as e:
+        print(f"  Warning: Could not generate metadata UMAP: {e}")
+        import traceback
+        traceback.print_exc()
 
     # ------------------------------------------------------------------
     analyzer.generate_report(metadata_df)

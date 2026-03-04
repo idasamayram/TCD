@@ -1276,11 +1276,119 @@ def plot_umap_prototypes(
     ax.set_title("By Prototype Assignment")
     ax.set_xlabel(f"{method_name} 1")
     ax.set_ylabel(f"{method_name} 2")
-    ax.legend(markerscale=2, fontsize=8, ncol=2)
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=8, ncol=2)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     return fig
+
+
+def plot_umap_metadata(
+    features: np.ndarray,
+    labels: np.ndarray,
+    metadata_df: Any,
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    figsize: Tuple[int, int] = (18, 6),
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    random_state: int = 42
+) -> plt.Figure:
+    """
+    UMAP visualization colored by metadata (class, machine, operation).
+
+    Creates 3 side-by-side panels: colored by class, by machine, by operation.
+
+    Args:
+        features: CRV feature matrix of shape (N, n_filters).
+        labels: Class labels of shape (N,).
+        metadata_df: DataFrame with columns 'machine' and 'operation'.
+        class_names: Mapping from class ID to display name.
+        figsize: Figure size.
+        n_neighbors: UMAP n_neighbors parameter.
+        min_dist: UMAP min_dist parameter.
+        random_state: Random seed for reproducibility.
+
+    Returns:
+        Matplotlib figure with three side-by-side scatter plots colored by
+        class, machine, and operation respectively.
+    """
+    try:
+        import umap
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            random_state=random_state
+        )
+        method_name = "UMAP"
+    except ImportError:
+        from sklearn.decomposition import PCA
+        reducer = PCA(n_components=2, random_state=random_state)
+        method_name = "PCA"
+
+    embedding = reducer.fit_transform(features)
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    fig.suptitle(f"CRV Space — {method_name} Colored by Metadata", fontsize=14, fontweight='bold')
+
+    # Panel 1: By class
+    ax = axes[0]
+    class_colors = {0: 'green', 1: 'red'}
+    for cid, cname in class_names.items():
+        mask = labels == cid
+        if mask.sum() > 0:
+            ax.scatter(
+                embedding[mask, 0], embedding[mask, 1],
+                c=class_colors.get(cid, 'blue'), label=cname,
+                alpha=0.5, s=20, edgecolors='none'
+            )
+    ax.set_title("By Class")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2)
+    ax.grid(True, alpha=0.3)
+
+    # Panel 2: By machine
+    ax = axes[1]
+    machines = metadata_df['machine'].values
+    unique_machines = sorted(set(m for m in machines if m != 'unknown'))
+    machine_cmap = plt.get_cmap('Set1')
+    for i, machine in enumerate(unique_machines):
+        mask = machines == machine
+        ax.scatter(
+            embedding[mask, 0], embedding[mask, 1],
+            color=machine_cmap(i), label=machine,
+            alpha=0.5, s=20, edgecolors='none'
+        )
+    ax.set_title("By Machine")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2)
+    ax.grid(True, alpha=0.3)
+
+    # Panel 3: By operation
+    ax = axes[2]
+    operations = metadata_df['operation'].values
+    unique_ops = sorted(set(o for o in operations if o != 'unknown'))
+    op_cmap = plt.get_cmap('tab10')
+    for i, op in enumerate(unique_ops):
+        mask = operations == op
+        ax.scatter(
+            embedding[mask, 0], embedding[mask, 1],
+            color=op_cmap(i % 10), label=op,
+            alpha=0.5, s=20, edgecolors='none'
+        )
+    ax.set_title("By Operation")
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=7, ncol=2)
+    ax.grid(True, alpha=0.3)
+
+    for ax in axes:
+        ax.set_xlabel(f"{method_name} 1")
+        ax.set_ylabel(f"{method_name} 2")
+
+    plt.tight_layout()
+    return fig
+
 
 
 def plot_concept_prototype_matrix(
