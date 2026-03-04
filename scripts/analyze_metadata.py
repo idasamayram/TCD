@@ -20,8 +20,6 @@ import os
 import pickle
 
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from models.cnn1d_model import VibrationDataset
@@ -81,40 +79,27 @@ def main():
             import torch
             with open(tcd_model_path, 'rb') as f:
                 tcd = pickle.load(f)
-            if len(features) != len(dataset):
-                print(
-                    f"  Warning: features length ({len(features)}) != dataset length "
-                    f"({len(dataset)}). Some samples may not have prototype assignments."
-                )
             features_t = torch.from_numpy(features).float()
-            # Build per-class cumulative offset so unequal n_components are handled correctly
-            feature_assignments = np.full(len(features), -1, dtype=int)
-            n_prototypes_per_class = {}
-            offset = 0
+            labels_t = torch.from_numpy(labels_arr).long()
+            prototype_assignments = np.full(len(features), -1, dtype=int)
             for class_id in [0, 1]:
                 class_mask = labels_arr == class_id
                 if class_id in tcd.prototype_discovery.gmms:
                     gmm = tcd.prototype_discovery.gmms[class_id]
-                    n_prototypes_per_class[class_id] = gmm.n_components
                     class_feat = features_t[class_mask]
-                    if len(class_feat) > 0:
-                        assigns = gmm.predict(class_feat.numpy())
-                        feature_assignments[class_mask] = assigns + offset
-                    offset += gmm.n_components
-            # Copy into a dataset-sized array (entries beyond len(features) stay -1)
-            prototype_assignments = np.full(len(dataset), -1, dtype=int)
-            copy_len = min(len(features), len(dataset))
-            prototype_assignments[:copy_len] = feature_assignments[:copy_len]
+                    assigns = gmm.predict(class_feat.numpy())
+                    # Offset prototype IDs by class: assumes equal n_components per class
+                    prototype_assignments[class_mask] = (
+                        assigns + class_id * gmm.n_components
+                    )
             print(f"  Loaded prototype assignments from tcd_model.pkl")
         except Exception as e:
             print(f"  Warning: Could not reconstruct assignments: {e}")
             prototype_assignments = None
-            n_prototypes_per_class = {}
 
     if prototype_assignments is None:
         print("  Warning: No prototype assignments found; using dummy -1 values")
         prototype_assignments = np.full(len(dataset), -1, dtype=int)
-        n_prototypes_per_class = {}
 
     # ------------------------------------------------------------------
     print("\nParsing filenames...")
@@ -155,7 +140,7 @@ def main():
         traceback.print_exc()
 
     # ------------------------------------------------------------------
-    analyzer.generate_report(metadata_df, n_prototypes_per_class=n_prototypes_per_class)
+    analyzer.generate_report(metadata_df)
 
     # Save metadata DataFrame
     csv_path = os.path.join(args.output, 'metadata.csv')

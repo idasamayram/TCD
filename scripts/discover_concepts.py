@@ -645,7 +645,6 @@ def run_variant_c(
         # Build per-sample prototype assignments across all classes
         proto_assignments = np.full(len(features_np), -1, dtype=int)
         gmm_means_dict = {}
-        offset = 0
         for class_id in [0, 1]:
             if class_id not in tcd.prototype_discovery.gmms:
                 continue
@@ -656,9 +655,8 @@ def run_variant_c(
                 assignments = tcd.assign_prototype(
                     features[labels == class_id], class_id
                 )
-                proto_assignments[class_mask] = assignments + offset
+                proto_assignments[class_mask] = assignments + class_id * gmm.n_components
             gmm_means_dict[class_id] = gmm.means_
-            offset += gmm.n_components
 
         fig_umap = plot_umap_prototypes(
             features=features_np,
