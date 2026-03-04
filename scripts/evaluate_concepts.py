@@ -606,6 +606,7 @@ def evaluate_variant_c(
 
         proto_assignments = np.full(len(features_np), -1, dtype=int)
         gmm_means_dict = {}
+        offset = 0
         for cid in [0, 1]:
             if cid not in tcd.prototype_discovery.gmms:
                 continue
@@ -614,8 +615,9 @@ def evaluate_variant_c(
             class_feat = features[labels == cid]
             if len(class_feat) > 0:
                 assignments = tcd.assign_prototype(class_feat, cid)
-                proto_assignments[class_mask] = assignments + cid * gmm.n_components
+                proto_assignments[class_mask] = assignments + offset
             gmm_means_dict[cid] = gmm.means_
+            offset += gmm.n_components
 
         fig_umap = plot_umap_prototypes(
             features=features_np,
