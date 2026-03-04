@@ -37,7 +37,7 @@ def main():
 
     # Load model
     print(f"Loading model from {args.model} …")
-    model = CNN1D_Wide(num_classes=2, num_channels=3)
+    model = CNN1D_Wide()
     state = torch.load(args.model, map_location='cpu')
     if isinstance(state, dict) and 'model_state_dict' in state:
         state = state['model_state_dict']
@@ -51,7 +51,7 @@ def main():
     data_path = Path(args.data)
     if data_path.exists():
         try:
-            dataset = VibrationDataset(str(data_path), split='test')
+            dataset = VibrationDataset(str(data_path))
             print(f"Loaded dataset: {len(dataset)} samples")
         except Exception as exc:
             print(f"Warning: could not load dataset — {exc}")
