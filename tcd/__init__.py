@@ -26,6 +26,7 @@ from .visualization import (
     plot_robustness_summary,
     plot_pcx_prototype_concept_grid,
     plot_umap_prototypes,
+    plot_umap_metadata,
     plot_concept_prototype_matrix
 )
 from .robustness import (
@@ -87,6 +88,7 @@ __all__ = [
     'plot_robustness_summary',
     'plot_pcx_prototype_concept_grid',
     'plot_umap_prototypes',
+    'plot_umap_metadata',
     'plot_concept_prototype_matrix',
     
     # Robustness
