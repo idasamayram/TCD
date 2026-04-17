@@ -1247,7 +1247,7 @@ def plot_umap_prototypes(
     # --- Right: colored by prototype assignment ---
     ax = axes[1]
     unique_protos = np.unique(prototype_assignments[prototype_assignments >= 0])
-    proto_cmap = plt.get_cmap('tab10')
+    proto_cmap = plt.get_cmap('Paired')
     markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+']
 
     for pi in unique_protos:
@@ -1267,11 +1267,19 @@ def plot_umap_prototypes(
             for pi in range(len(means)):
                 mean_emb = embedding[offset]
                 offset += 1
-                ax.scatter(
-                    mean_emb[0], mean_emb[1],
-                    c='black', marker='*', s=200, zorder=5,
-                    label=f"μ class{cid}" if pi == 0 else None
-                )
+
+                if cid == 0:
+                    ax.scatter(
+                        mean_emb[0], mean_emb[1],
+                        c='black', marker='*', s=100, zorder=5,
+                        label=f"μ class{cid}" if pi == 0 else None
+                    )
+                else:
+                    ax.scatter(
+                        mean_emb[0], mean_emb[1],
+                        c='red', marker='*', s=200, zorder=5,
+                        label=f"μ class{cid}" if pi == 0 else None
+                    )
 
     ax.set_title("By Prototype Assignment")
     ax.set_xlabel(f"{method_name} 1")
