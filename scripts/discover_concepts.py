@@ -226,7 +226,7 @@ def run_variant_c(
 
     # Get layer name from config if not specified
     if layer_name is None:
-        layer_name = config['tcd'].get('primary_layer', 'conv3')
+        layer_name = config['tcd'].get('primary_layer', 'conv4')
     
     # Load concept features (CRP filter relevances)
     print(f"\nStep 1: Loading CRP concept relevances for layer {layer_name}...")
@@ -309,14 +309,14 @@ def run_variant_c(
     print("="*80)
     
     # Check if we should auto-select n_prototypes
-    use_bic = config['tcd'].get('use_bic_selection', False)
+    use_bic = config['tcd'].get('use_bic_selection', True)
     
     if use_bic:
         print("\nAuto-selecting optimal n_prototypes using BIC...")
         from tcd.prototypes import TemporalPrototypeDiscovery
         
         # Get BIC range from config
-        bic_range = config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6])
+        bic_range = config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         min_n = min(bic_range)
         max_n = max(bic_range)
         
@@ -1116,8 +1116,8 @@ def main():
                        help='Path to CRP features directory from run_analysis.py')
     parser.add_argument('--output', type=str, required=True,
                        help='Output directory for concept results')
-    parser.add_argument('--layer', type=str, default='conv3',
-                       help='Layer to use for Variant C (default: conv3)')
+    parser.add_argument('--layer', type=str, default='conv4',
+                       help='Layer to use for Variant C (default: conv4)')
     parser.add_argument('--window-based', action='store_true',
                        help='Use window-based concept discovery for Variant A (default: filterbank)')
     parser.add_argument('--data', type=str, default=None,
