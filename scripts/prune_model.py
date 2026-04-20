@@ -59,6 +59,22 @@ def main():
         '--device', type=str, default='cpu',
         help='Torch device (default: cpu)'
     )
+    parser.add_argument(
+        '--concepts', type=str, default=None,
+        help='Optional Variant C folder (results/concepts_C) for merged prototype-aware pruning'
+    )
+    parser.add_argument(
+        '--layer', type=str, default='conv3', choices=['conv1', 'conv2', 'conv3', 'conv4'],
+        help='Layer for merged/projection pruning (default: conv3)'
+    )
+    parser.add_argument(
+        '--merge-alpha', type=float, default=0.5,
+        help='Merged importance weight: alpha*relevance + (1-alpha)*prototype (default: 0.5)'
+    )
+    parser.add_argument(
+        '--run-projection', action='store_true',
+        help='Also run projection pruning analysis on --layer using selected importance'
+    )
     args = parser.parse_args()
 
     # Validate inputs
@@ -98,6 +114,24 @@ def main():
     # ------------------------------------------------------------------
     print("\nComputing filter importance for all layers...")
     layer_importance = pruner.compute_all_layer_importance()
+
+    merged_importance = None
+    if args.concepts:
+        print(
+            f"\nComputing merged importance for {args.layer} "
+            f"(alpha={args.merge_alpha:.2f}) using {args.concepts}..."
+        )
+        merged_importance = pruner.compute_merged_importance(
+            layer_name=args.layer,
+            concepts_dir=args.concepts,
+            merge_alpha=args.merge_alpha
+        )
+        layer_importance[args.layer] = merged_importance
+        np.save(
+            os.path.join(args.output, f"merged_importance_{args.layer}.npy"),
+            merged_importance
+        )
+        print(f"  Saved merged importance for {args.layer}")
 
     # Plot filter importance bar charts
     for layer_name, importance in layer_importance.items():
@@ -171,6 +205,42 @@ def main():
     plt.close(fig)
     print(f"\nSaved accuracy-vs-compression curve to {curve_path}")
     print(f"\n✓ All pruning results saved to {args.output}")
+
+    # ------------------------------------------------------------------
+    # Optional projection pruning analysis
+    if args.run_projection:
+        print("\nRunning projection pruning analysis...")
+        if merged_importance is not None:
+            projection_importance = merged_importance
+            print(f"  Using merged importance for layer {args.layer}")
+        else:
+            projection_importance = layer_importance[args.layer]
+            print(f"  Using relevance importance for layer {args.layer}")
+
+        proj_results = pruner.evaluate_projection_pruning(
+            model=model,
+            dataset=dataset,
+            layer_name=args.layer,
+            importance=projection_importance,
+            keep_ratios=args.keep_ratios,
+            device=args.device
+        )
+
+        print("\n" + "=" * 72)
+        print(f"{'PROJECTION keep_ratio':>22}  {'kept':>10}  {'accuracy':>10}  {'drop':>10}")
+        print("-" * 72)
+        for row in proj_results:
+            print(
+                f"  {row['keep_ratio']:>18.2f}  "
+                f"{row['n_kept_filters']:>10d}  "
+                f"{row['accuracy']:>10.4f}  "
+                f"{row['accuracy_drop']:>+10.4f}"
+            )
+        print("=" * 72)
+
+        proj_path = os.path.join(args.output, f'projection_pruning_{args.layer}.npy')
+        np.save(proj_path, np.array(proj_results, dtype=object), allow_pickle=True)
+        print(f"Saved projection pruning results to {proj_path}")
 
 
 if __name__ == '__main__':

@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import h5py
 import copy
+import pickle
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -103,6 +104,87 @@ class RelevancePruner:
         self.filter_importance[layer_name] = importance
         return importance
 
+    def compute_prototype_importance(
+        self,
+        concepts_dir: str,
+        layer_name: str,
+    ) -> np.ndarray:
+        """
+        Compute per-filter importance from prototype means |μ|.
+
+        Args:
+            concepts_dir: Path to Variant C output folder containing ``tcd_model.pkl``.
+            layer_name: Layer name the concepts were discovered on.
+
+        Returns:
+            Array of shape ``(n_filters,)`` with prototype-based importance.
+        """
+        tcd_path = Path(concepts_dir) / "tcd_model.pkl"
+        results_path = Path(concepts_dir) / "results.pkl"
+        if not tcd_path.exists() or not results_path.exists():
+            raise FileNotFoundError(
+                f"Could not find tcd_model/results in {concepts_dir}. "
+                "Run scripts/discover_concepts.py --variant C first."
+            )
+
+        with open(results_path, "rb") as f:
+            results = pickle.load(f)
+        discovered_layer = results.get("layer_name", None)
+        if discovered_layer is not None and discovered_layer != layer_name:
+            raise ValueError(
+                f"Concepts were discovered at layer '{discovered_layer}', "
+                f"but pruning layer requested is '{layer_name}'."
+            )
+
+        with open(tcd_path, "rb") as f:
+            tcd = pickle.load(f)
+
+        gmms = getattr(tcd.prototype_discovery, "gmms", {})
+        if not gmms:
+            raise ValueError("No per-class GMMs found in tcd_model.pkl")
+
+        means = []
+        for class_id, gmm in gmms.items():
+            if hasattr(gmm, "means_"):
+                means.append(np.abs(gmm.means_))
+        if not means:
+            raise ValueError("No prototype means found in GMMs")
+
+        # Mean absolute prototype magnitude across all classes/components.
+        cat = np.concatenate(means, axis=0)  # (n_total_components, n_filters)
+        proto_importance = cat.mean(axis=0)
+        return proto_importance
+
+    def compute_merged_importance(
+        self,
+        layer_name: str,
+        concepts_dir: str,
+        merge_alpha: float = 0.5,
+    ) -> np.ndarray:
+        """
+        Merge CRP relevance importance with prototype-mean importance.
+
+        merged = alpha * norm(relevance) + (1-alpha) * norm(prototype)
+
+        Args:
+            layer_name: Conv layer name.
+            concepts_dir: Variant C output directory (for prototype means).
+            merge_alpha: Weight for relevance importance in [0, 1].
+        """
+        if not (0.0 <= merge_alpha <= 1.0):
+            raise ValueError("merge_alpha must be in [0, 1]")
+
+        rel = self.compute_filter_importance(layer_name)
+        proto = self.compute_prototype_importance(concepts_dir, layer_name)
+
+        # Min-max normalization for stable weighting.
+        rel_norm = (rel - rel.min()) / (rel.max() - rel.min() + 1e-10)
+        proto_norm = (proto - proto.min()) / (proto.max() - proto.min() + 1e-10)
+        merged = merge_alpha * rel_norm + (1.0 - merge_alpha) * proto_norm
+
+        self.filter_importance[layer_name] = merged
+        return merged
+
     def compute_all_layer_importance(self) -> Dict[str, np.ndarray]:
         """
         Compute importance for all four conv layers.
@@ -132,6 +214,14 @@ class RelevancePruner:
         if layer_name not in self.filter_importance:
             self.compute_filter_importance(layer_name)
         importance = self.filter_importance[layer_name]
+        n_keep = max(1, int(np.ceil(len(importance) * keep_ratio)))
+        top_indices = np.argsort(importance)[::-1][:n_keep]
+        return np.sort(top_indices)
+
+    def get_keep_indices_from_importance(
+        self, importance: np.ndarray, keep_ratio: float
+    ) -> np.ndarray:
+        """Return kept filter indices from an externally provided importance vector."""
         n_keep = max(1, int(np.ceil(len(importance) * keep_ratio)))
         top_indices = np.argsort(importance)[::-1][:n_keep]
         return np.sort(top_indices)
@@ -199,6 +289,72 @@ class RelevancePruner:
             new_model.fc1 = new_fc1
 
         return new_model
+
+    def evaluate_projection_pruning(
+        self,
+        model: nn.Module,
+        dataset: torch.utils.data.Dataset,
+        layer_name: str,
+        importance: np.ndarray,
+        keep_ratios: Optional[List[float]] = None,
+        device: str = "cpu",
+        batch_size: int = 64,
+    ) -> List[Dict]:
+        """
+        Evaluate projection-based concept pruning (no structural weight deletion).
+
+        At inference, project the chosen layer activations onto the subspace spanned
+        by the top-k kept filters (implemented as zeroing all dropped channels).
+        """
+        if keep_ratios is None:
+            keep_ratios = [0.9, 0.8, 0.7, 0.5, 0.3]
+
+        loader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=False, num_workers=0
+        )
+        model.eval().to(device)
+
+        baseline = self._evaluate(model, dataset, device=device, batch_size=batch_size)
+        results: List[Dict] = []
+
+        # Find layer module once.
+        target_module = dict(model.named_modules()).get(layer_name, None)
+        if target_module is None:
+            raise ValueError(f"Layer {layer_name} not found in model.")
+
+        n_filters = len(importance)
+
+        for ratio in keep_ratios:
+            keep_idx = self.get_keep_indices_from_importance(importance, ratio)
+            keep_mask = torch.zeros(n_filters, dtype=torch.bool, device=device)
+            keep_mask[torch.tensor(keep_idx, dtype=torch.long, device=device)] = True
+
+            def _projection_hook(module, inp, out):
+                mod = out.clone()
+                mod[:, ~keep_mask, :] = 0.0
+                return mod
+
+            handle = target_module.register_forward_hook(_projection_hook)
+            correct = total = 0
+            with torch.no_grad():
+                for x, y in loader:
+                    x, y = x.to(device), y.to(device)
+                    preds = model(x).argmax(dim=1)
+                    correct += (preds == y).sum().item()
+                    total += y.numel()
+            handle.remove()
+
+            acc = correct / max(total, 1)
+            results.append(
+                {
+                    "keep_ratio": ratio,
+                    "accuracy": acc,
+                    "accuracy_drop": baseline - acc,
+                    "n_kept_filters": int(len(keep_idx)),
+                    "n_total_filters": int(n_filters),
+                }
+            )
+        return results
 
     # ------------------------------------------------------------------
     # Iterative pruning
