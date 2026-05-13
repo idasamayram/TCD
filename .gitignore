@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.sif
 
 # Virtual environments
 venv/
@@ -27,7 +28,7 @@ env/
 .venv
 
 # Jupyter Notebook
-.ipynb_checkpoints
+.ipynb_checkpoints/
 *.ipynb_checkpoints
 
 # IDEs
@@ -47,6 +48,13 @@ plots/
 *.hdf5
 *.h5
 data/
+
+# NEW: typical experiment/run directories
+logs/        # if you store training logs here
+log/         # sometimes people use this name
+runs/        # e.g. for TensorBoard / wandb
+wandb/       # if you use Weights & Biases
+tensorboard/ # if you keep TB logs in repo dir
 
 # OS
 .DS_Store
