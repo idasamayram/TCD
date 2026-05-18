@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import argparse
 import os
 import pickle
-from typing import Optional
 
 import matplotlib
 matplotlib.use('Agg')
@@ -53,39 +52,6 @@ def _load_signals_class_order(dataset: VibrationDataset) -> tuple[torch.Tensor, 
     signals_t = torch.stack(signals)  # (N, C, T)
     labels_np = np.asarray(labels, dtype=int)
     return signals_t, labels_np
-
-
-def _load_signals_from_feature_ids(
-    dataset: VibrationDataset,
-    features_dir: Optional[str],
-) -> tuple[Optional[torch.Tensor], Optional[np.ndarray]]:
-    """Load signals using sample_ids_class_*.pt when a CRP feature dir is given."""
-    if not features_dir:
-        return None, None
-
-    sample_ids_all = []
-    labels_all = []
-    for class_id in [0, 1]:
-        sample_id_path = os.path.join(features_dir, f"sample_ids_class_{class_id}.pt")
-        if not os.path.exists(sample_id_path):
-            print(f"Warning: {sample_id_path} not found; falling back to class-order loading")
-            return None, None
-        sample_ids = np.asarray(torch.load(sample_id_path), dtype=int)
-        sample_ids_all.extend(sample_ids.tolist())
-        labels_all.extend([class_id] * len(sample_ids))
-
-    signals = []
-    labels = []
-    for idx in sample_ids_all:
-        x, y = dataset[int(idx)]
-        signals.append(x)
-        labels.append(int(y))
-
-    labels = np.asarray(labels, dtype=int)
-    expected = np.asarray(labels_all, dtype=int)
-    if not np.array_equal(labels, expected):
-        print("Warning: dataset labels from sample IDs differ from feature class order")
-    return torch.stack(signals), labels
 
 
 def _assign_prototypes(features: np.ndarray, labels: np.ndarray, tcd, results: dict) -> np.ndarray:
@@ -120,8 +86,6 @@ def main():
     parser.add_argument('--output', type=str, default='results/frequency', help='Output directory')
     parser.add_argument('--sample-rate', type=float, default=400.0, help='Sampling rate in Hz (default: 400)')
     parser.add_argument('--nperseg', type=int, default=256, help='Welch segment length (default: 256)')
-    parser.add_argument('--features', type=str, default=None,
-                        help='Optional CRP features directory; when provided, sample_ids_class_*.pt are used for alignment')
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -141,9 +105,7 @@ def main():
 
     print("Loading dataset...")
     dataset = VibrationDataset(args.data)
-    signals, labels_dataset = _load_signals_from_feature_ids(dataset, args.features)
-    if signals is None:
-        signals, labels_dataset = _load_signals_class_order(dataset)
+    signals, labels_dataset = _load_signals_class_order(dataset)
 
     if len(signals) != len(features):
         raise ValueError(
