@@ -1,0 +1,75 @@
+# Reference configuration for the paper's main TCD Variant C experiment.
+# Use this to freeze the baseline before layer sweeps, frequency relevance,
+# robustness, metadata analysis, and pruning comparisons.
+
+model:
+  path: "./cnn1d_model_new.ckpt"
+  name: "./cnn1d_wide"
+
+data:
+  path: "./data"
+  num_channels: 3
+  seq_length: 2000
+  sample_rate: 400
+  class_names: ["OK", "NOK"]
+
+analysis:
+  layers: ["conv1", "conv2", "conv3", "conv4"]
+  composite: "cnc_validated"
+  concept_extraction_composite: "cnc_validated"
+  use_signed_relevance: false
+  batch_size: 4
+  use_class_weights: false
+
+tcd:
+  variant: "C"
+  primary_layer: "conv3"
+  n_prototypes: 3
+  use_bic_selection: true
+  bic_range: [1, 2, 3, 4]
+  top_k_samples: 6
+  gmm_covariance: "diag"
+  gmm_n_init: 5
+  gmm_max_iter: 200
+  balance_method: none
+  global_windows:
+    window_size: 40
+    n_top_positions: 10
+    threshold_factor: 1.5
+    per_class: true
+    use_signed_relevance: false
+  important_windows:
+    enabled: false
+
+intervention:
+  method: "suppress"
+  target_layer: "conv3"
+  concept_indices: []
+
+evaluation:
+  prototype_intervention: true
+  prototype_top_k: 5
+  concept_heatmaps: true
+  concept_heatmap_top_k: 5
+  robustness_analysis: false
+  deviation_threshold: 2.0
+  incremental_faithfulness:
+    enabled: true
+    n_samples: 100
+    n_steps: 30
+
+robustness:
+  n_samples: 100
+  noise_levels: [0.01, 0.05, 0.1, 0.2]
+  shift_amounts: [10, 25, 50]
+  test_channel_dropout: true
+
+output:
+  results_dir: "results"
+  plots_dir: "plots"
+  save_heatmaps: true
+  save_features: true
+
+pruning:
+  keep_ratios: [0.9, 0.8, 0.7, 0.5, 0.3]
+  knee_threshold: 0.01
