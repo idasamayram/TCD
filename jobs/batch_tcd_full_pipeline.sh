@@ -13,8 +13,8 @@ set -euo pipefail
 echo "[$(date)] Starting job ${SLURM_JOB_ID} on ${HOSTNAME}"
 
 # ---------- USER PATHS ----------
-PROJECT_DIR="/data/clusters/users/asadi/projects/TCD"
-CONTAINER_SIF="${PROJECT_DIR}/container/tcd.sif"
+PROJECT_DIR="${PROJECT_DIR:-$SLURM_SUBMIT_DIR}"
+CONTAINER_SIF="${CONTAINER_SIF:-${PROJECT_DIR}/container/tcd.sif}"
 
 # Prefer the shared dataset in datapool3 for reproducibility and to avoid accidental drift.
 DATA_DIR="/data/datapool3/datasets/asadi/TCD/data"
@@ -22,8 +22,9 @@ DATA_DIR="/data/datapool3/datasets/asadi/TCD/data"
 # DATA_DIR="${PROJECT_DIR}/data"
 
 # Output root (per-job folder will be created automatically)
-OUTPUT_ROOT="${PROJECT_DIR}/results/slurm/${SLURM_JOB_ID}"
-mkdir -p "${OUTPUT_ROOT}" "${PROJECT_DIR}/logs/tcd"
+OUTPUT_BASE="${OUTPUT_BASE:-$SLURM_SUBMIT_DIR/results/slurm}"
+OUTPUT_ROOT="${OUTPUT_BASE}/${SLURM_JOB_ID}"
+mkdir -p "${OUTPUT_ROOT}" "$SLURM_SUBMIT_DIR/logs/tcd"
 
 # If your cluster provides a local scratch helper, use it; otherwise fallback to /tmp
 if [ -f /etc/slurm/local_job_dir.sh ]; then
@@ -38,6 +39,20 @@ mkdir -p "${SCRATCH_DIR}"
 # Stage job outputs in scratch first, then copy back at the end.
 SCRATCH_OUT="${SCRATCH_DIR}/out"
 mkdir -p "${SCRATCH_OUT}"
+
+# ---------- PRE-FLIGHT CHECKS ----------
+if [ ! -d "${PROJECT_DIR}" ]; then
+  echo "ERROR: PROJECT_DIR does not exist: ${PROJECT_DIR}" >&2
+  exit 1
+fi
+if [ ! -f "${CONTAINER_SIF}" ]; then
+  echo "ERROR: CONTAINER_SIF does not exist: ${CONTAINER_SIF}" >&2
+  exit 1
+fi
+if [ ! -d "${DATA_DIR}" ]; then
+  echo "ERROR: DATA_DIR does not exist: ${DATA_DIR}" >&2
+  exit 1
+fi
 
 # ---------- CONTAINER COMMAND ----------
 # Bind project and data read-write/read-only as needed.
