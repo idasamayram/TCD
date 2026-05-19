@@ -301,12 +301,10 @@ class RelevancePruner:
         batch_size: int = 64,
     ) -> List[Dict]:
         """
-        Evaluate inference-time concept-channel masking.
+        Evaluate projection-based concept pruning (no structural weight deletion).
 
-        This method keeps the public name used by the CLI from the previous PR,
-        but the operation is deliberately described as channel masking rather than
-        true orthogonal projection: dropped channels are set to zero by a forward
-        hook and the model architecture/weights are left unchanged.
+        At inference, project the chosen layer activations onto the subspace spanned
+        by the top-k kept filters (implemented as zeroing all dropped channels).
         """
         if keep_ratios is None:
             keep_ratios = [0.9, 0.8, 0.7, 0.5, 0.3]

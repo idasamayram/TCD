@@ -73,7 +73,7 @@ def main():
     )
     parser.add_argument(
         '--run-projection', action='store_true',
-        help='Also run inference-time concept-channel masking on --layer using selected importance'
+        help='Also run projection pruning analysis on --layer using selected importance'
     )
     args = parser.parse_args()
 
@@ -207,9 +207,9 @@ def main():
     print(f"\n✓ All pruning results saved to {args.output}")
 
     # ------------------------------------------------------------------
-    # Optional concept-channel masking analysis (flag kept for compatibility)
+    # Optional projection pruning analysis
     if args.run_projection:
-        print("\nRunning concept-channel masking analysis...")
+        print("\nRunning projection pruning analysis...")
         if merged_importance is not None:
             projection_importance = merged_importance
             print(f"  Using merged importance for layer {args.layer}")
@@ -227,7 +227,7 @@ def main():
         )
 
         print("\n" + "=" * 72)
-        print(f"{'MASKING keep_ratio':>22}  {'kept':>10}  {'accuracy':>10}  {'drop':>10}")
+        print(f"{'PROJECTION keep_ratio':>22}  {'kept':>10}  {'accuracy':>10}  {'drop':>10}")
         print("-" * 72)
         for row in proj_results:
             print(
