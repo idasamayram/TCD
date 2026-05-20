@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+
+%post
+    export PATH=/opt/conda/bin:$PATH
+
+    pip install --upgrade pip
+
+    pip install \
+        "numpy<2" \
+        torchvision \
+        torchaudio \
+        zennit-crp \
+        scikit-learn \
+        scikit-image \
+        h5py \
+        jupyter \
+        pandas \
+        opencv-python \
+        umap-learn \
+        timm \
+        matplotlib \
+        scipy \
+        tqdm \
+        pyyaml
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    exec python "$@"
