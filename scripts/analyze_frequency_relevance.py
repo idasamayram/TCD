@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Prototype-conditioned DFT-LRP frequency relevance analysis.
+Prototype-conditioned frequency relevance analysis.
 
-This script complements ``scripts/analyze_frequency.py``.  The Welch/PSD script
+This script complements ``scripts/analyze_frequency.py``. The Welch/PSD script
 summarizes which frequencies are present in prototype-assigned samples; this
-script summarizes which frequencies are relevant to the model by applying a
-DFT-LRP style transform to saved input-level relevance heatmaps.
+script summarizes which frequencies are relevant to the model by applying
+one of the supported virtual inspection methods to saved input-level
+relevance heatmaps:
+
+- dft_lrp: existing DFT-LRP rule (tcd.frequency_relevance)
+- vil_idft: Virtual Inspection Layer (IDFT) real-valued formulation
+- vil_stdft: Virtual Inspection Layer with windowed STDFT aggregation
 
 Expected pipeline:
     1. python scripts/run_analysis.py --output results/crp_features ...
@@ -39,6 +44,10 @@ from tcd.frequency_relevance import (
     DEFAULT_CNC_BANDS,
     band_relevance,
     dft_lrp_frequency_relevance,
+)
+from tcd.virtual_inspection_layer import (
+    vil_idft_frequency_relevance,
+    vil_stdft_frequency_relevance,
 )
 
 
@@ -146,6 +155,55 @@ def _choose_indices(mask: np.ndarray, max_samples: int, seed: int) -> np.ndarray
     return np.sort(rng.choice(indices, size=max_samples, replace=False))
 
 
+def _compute_frequency_relevance(
+    method: str,
+    signal: np.ndarray,
+    relevance: np.ndarray,
+    sample_rate: float,
+    eps: float,
+    renormalize: bool,
+    window_width: int,
+    window_shift: int | None,
+    window_shape: str,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float]]:
+    if method == "dft_lrp":
+        return dft_lrp_frequency_relevance(
+            signal=signal,
+            relevance=relevance,
+            sample_rate=sample_rate,
+            eps=eps,
+            one_sided=True,
+            renormalize=renormalize,
+        )
+    if method == "vil_idft":
+        return vil_idft_frequency_relevance(
+            signal=signal,
+            relevance=relevance,
+            sample_rate=sample_rate,
+            eps=eps,
+            one_sided=True,
+            renormalize=renormalize,
+        )
+    if method == "vil_stdft":
+        freqs, relevance_tf, diagnostics = vil_stdft_frequency_relevance(
+            signal=signal,
+            relevance=relevance,
+            sample_rate=sample_rate,
+            eps=eps,
+            one_sided=True,
+            renormalize=renormalize,
+            window_width=window_width,
+            window_shift=window_shift,
+            window_shape=window_shape,
+        )
+        if relevance_tf.size == 0:
+            freq_rel = np.zeros_like(freqs)
+        else:
+            freq_rel = np.mean(relevance_tf, axis=0)
+        return freqs, freq_rel, diagnostics
+    raise ValueError(f"Unknown method: {method}")
+
+
 def _plot_prototype_relevance(
     output_dir: str,
     class_id: int,
@@ -153,6 +211,7 @@ def _plot_prototype_relevance(
     freqs: np.ndarray,
     mean_signed: np.ndarray,
     mean_abs: np.ndarray,
+    method: str,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
     colors = ["tab:red", "tab:green", "tab:blue"]
@@ -168,33 +227,45 @@ def _plot_prototype_relevance(
         ax.set_xlabel("Frequency (Hz)")
         ax.legend()
 
-    axes[0].set_title("Mean signed DFT relevance")
+    axes[0].set_title(f"Mean signed relevance ({method})")
     axes[0].set_ylabel("Relevance")
-    axes[1].set_title("Mean absolute DFT relevance")
+    axes[1].set_title(f"Mean absolute relevance ({method})")
     axes[1].set_ylabel("|Relevance|")
-    fig.suptitle(f"Class {class_id} prototype {prototype_id}: DFT-LRP frequency relevance")
+    fig.suptitle(f"Class {class_id} prototype {prototype_id}: frequency relevance")
     fig.tight_layout()
 
-    path = os.path.join(output_dir, f"class{class_id}_prototype{prototype_id}_dft_relevance.png")
+    path = os.path.join(
+        output_dir, f"class{class_id}_prototype{prototype_id}_freq_relevance_{method}.png"
+    )
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prototype-conditioned DFT-LRP frequency relevance analysis"
+        description="Prototype-conditioned frequency relevance analysis"
     )
     parser.add_argument('--data', required=True, help='Path to CNC data directory')
     parser.add_argument('--features', required=True, help='Path to CRP feature directory from run_analysis.py')
     parser.add_argument('--concepts', required=True, help='Path to Variant C output directory')
     parser.add_argument('--output', default='results/frequency_relevance', help='Output directory')
     parser.add_argument('--sample-rate', type=float, default=400.0, help='Sampling rate in Hz')
-    parser.add_argument('--eps', type=float, default=1e-6, help='DFT-LRP division stabilizer')
+    parser.add_argument('--eps', type=float, default=1e-6, help='Division stabilizer')
     parser.add_argument('--max-samples-per-prototype', type=int, default=250,
                         help='Subsample per prototype for speed; <=0 uses all samples')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for subsampling')
     parser.add_argument('--renormalize', action='store_true',
                         help='Scale frequency relevance sums to match time relevance sums')
+    parser.add_argument('--method', default='dft_lrp',
+                        choices=['dft_lrp', 'vil_idft', 'vil_stdft'],
+                        help='Frequency relevance method to use')
+    parser.add_argument('--vil-window-width', type=int, default=128,
+                        help='STDFT window width (samples)')
+    parser.add_argument('--vil-window-shift', type=int, default=None,
+                        help='STDFT window shift (samples); default uses 50% overlap')
+    parser.add_argument('--vil-window-shape', type=str, default='rectangle',
+                        choices=['rectangle', 'halfsine'],
+                        help='STDFT window shape')
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -250,13 +321,16 @@ def main():
 
         for sample_index in proto_indices:
             for axis_idx in range(raw_signals.shape[1]):
-                freqs, freq_rel, diagnostics = dft_lrp_frequency_relevance(
+                freqs, freq_rel, diagnostics = _compute_frequency_relevance(
+                    method=args.method,
                     signal=raw_signals[sample_index, axis_idx],
                     relevance=heatmaps[sample_index, axis_idx],
                     sample_rate=args.sample_rate,
                     eps=args.eps,
-                    one_sided=True,
                     renormalize=args.renormalize,
+                    window_width=args.vil_window_width,
+                    window_shift=args.vil_window_shift,
+                    window_shape=args.vil_window_shape,
                 )
                 freqs_ref = freqs
                 per_axis_signed[axis_idx].append(freq_rel)
@@ -268,6 +342,7 @@ def main():
                     "prototype_id": int(proto_id),
                     "global_prototype_id": int(global_proto_id),
                     "axis": AXIS_NAMES[axis_idx] if axis_idx < len(AXIS_NAMES) else str(axis_idx),
+                    "method": args.method,
                     **diagnostics,
                 })
 
@@ -281,7 +356,7 @@ def main():
         ])
 
         _plot_prototype_relevance(
-            args.output, class_id, proto_id, freqs_ref, mean_signed, mean_abs
+            args.output, class_id, proto_id, freqs_ref, mean_signed, mean_abs, args.method
         )
 
         for axis_idx in range(mean_abs.shape[0]):
@@ -293,6 +368,7 @@ def main():
                 "global_prototype_id": int(global_proto_id),
                 "axis": axis_name,
                 "n_samples": int(len(proto_indices)),
+                "method": args.method,
                 "peak_freq_hz_abs_relevance": float(freqs_ref[peak_idx]),
                 "total_abs_relevance": float(np.sum(mean_abs[axis_idx])),
                 "total_signed_relevance": float(np.sum(mean_signed[axis_idx])),
@@ -300,7 +376,9 @@ def main():
             row.update(band_relevance(freqs_ref, mean_abs[axis_idx], DEFAULT_CNC_BANDS, use_absolute=True))
             summary_rows.append(row)
 
-    summary_path = os.path.join(args.output, "prototype_frequency_relevance.csv")
+    summary_path = os.path.join(
+        args.output, f"prototype_frequency_relevance_{args.method}.csv"
+    )
     if summary_rows:
         with open(summary_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
@@ -308,7 +386,9 @@ def main():
             writer.writerows(summary_rows)
     print(f"Saved prototype frequency relevance summary to {summary_path}")
 
-    conservation_path = os.path.join(args.output, "conservation_check.csv")
+    conservation_path = os.path.join(
+        args.output, f"conservation_check_{args.method}.csv"
+    )
     if conservation_rows:
         with open(conservation_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(conservation_rows[0].keys()))
@@ -316,7 +396,7 @@ def main():
             writer.writerows(conservation_rows)
     print(f"Saved conservation diagnostics to {conservation_path}")
 
-    print(f"\n✓ DFT-LRP prototype frequency relevance analysis complete: {args.output}")
+    print(f"\n✓ Frequency relevance analysis complete: {args.output}")
 
 
 if __name__ == "__main__":
