@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+Prototype-conditioned DFT-LRP frequency relevance analysis.
+
+This script complements ``scripts/analyze_frequency.py``.  The Welch/PSD script
+summarizes which frequencies are present in prototype-assigned samples; this
+script summarizes which frequencies are relevant to the model by applying a
+DFT-LRP style transform to saved input-level relevance heatmaps.
+
+Expected pipeline:
+    1. python scripts/run_analysis.py --output results/crp_features ...
+    2. python scripts/discover_concepts.py --variant C --features results/crp_features \
+           --output results/variantC_conv3 --layer conv3 ...
+    3. python scripts/analyze_frequency_relevance.py \
+           --data ./data \
+           --features results/crp_features \
+           --concepts results/variantC_conv3 \
+           --output results/frequency_relevance
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import argparse
+import csv
+import os
+import pickle
+from typing import Dict, List, Tuple
+
+import h5py
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+from models.cnn1d_model import VibrationDataset
+from tcd.frequency_relevance import (
+    DEFAULT_CNC_BANDS,
+    band_relevance,
+    dft_lrp_frequency_relevance,
+)
+
+
+AXIS_NAMES = ["X", "Y", "Z"]
+
+
+def _load_concepts(concepts_dir: str):
+    results_path = os.path.join(concepts_dir, "results.pkl")
+    model_path = os.path.join(concepts_dir, "tcd_model.pkl")
+    if not os.path.exists(results_path) or not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"Missing results.pkl or tcd_model.pkl in {concepts_dir}. "
+            "Run discover_concepts.py --variant C first."
+        )
+    with open(results_path, "rb") as f:
+        results = pickle.load(f)
+    with open(model_path, "rb") as f:
+        tcd = pickle.load(f)
+    return results, tcd
+
+
+def _load_heatmaps_and_sample_ids(features_dir: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load heatmaps, labels, and original dataset indices in CRV feature order."""
+    heatmaps: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
+    sample_ids: List[np.ndarray] = []
+
+    for class_id in [0, 1]:
+        heatmap_path = os.path.join(features_dir, f"heatmaps_class_{class_id}.hdf5")
+        sample_id_path = os.path.join(features_dir, f"sample_ids_class_{class_id}.pt")
+        if not os.path.exists(heatmap_path):
+            raise FileNotFoundError(f"Missing heatmap file: {heatmap_path}")
+        if not os.path.exists(sample_id_path):
+            raise FileNotFoundError(f"Missing sample id file: {sample_id_path}")
+
+        with h5py.File(heatmap_path, "r") as f:
+            if "heatmaps" not in f:
+                raise KeyError(f"Dataset 'heatmaps' not found in {heatmap_path}")
+            class_heatmaps = np.asarray(f["heatmaps"], dtype=np.float64)
+
+        class_sample_ids = np.asarray(torch.load(sample_id_path), dtype=int)
+        if len(class_heatmaps) != len(class_sample_ids):
+            raise ValueError(
+                f"Class {class_id} heatmap/sample-id mismatch: "
+                f"{len(class_heatmaps)} vs {len(class_sample_ids)}"
+            )
+
+        heatmaps.append(class_heatmaps)
+        labels.append(np.full(len(class_heatmaps), class_id, dtype=int))
+        sample_ids.append(class_sample_ids)
+
+    return (
+        np.concatenate(heatmaps, axis=0),
+        np.concatenate(labels, axis=0),
+        np.concatenate(sample_ids, axis=0),
+    )
+
+
+def _assign_per_class_prototypes(
+    features: np.ndarray,
+    labels: np.ndarray,
+    tcd,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return global prototype id, local prototype id, and class id for each sample.
+
+    Global ids are offset by preceding class prototype counts for plotting.  Local
+    ids remain the original GMM component index within the class.
+    """
+    global_assignments = np.full(len(features), -1, dtype=int)
+    local_assignments = np.full(len(features), -1, dtype=int)
+    assignment_classes = np.asarray(labels, dtype=int).copy()
+
+    gmms = getattr(tcd.prototype_discovery, "gmms", {})
+    offset = 0
+    for class_id in [0, 1]:
+        class_mask = labels == class_id
+        if class_id not in gmms or class_mask.sum() == 0:
+            continue
+        gmm = gmms[class_id]
+        local = gmm.predict(features[class_mask]).astype(int)
+        local_assignments[class_mask] = local
+        global_assignments[class_mask] = local + offset
+        offset += gmm.n_components
+
+    return global_assignments, local_assignments, assignment_classes
+
+
+def _load_raw_signals(dataset: VibrationDataset, sample_ids: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Load raw signals from the dataset using saved original sample indices."""
+    signals: List[np.ndarray] = []
+    labels: List[int] = []
+    for idx in sample_ids:
+        x, y = dataset[int(idx)]
+        signals.append(x.numpy())
+        labels.append(int(y))
+    return np.stack(signals, axis=0), np.asarray(labels, dtype=int)
+
+
+def _choose_indices(mask: np.ndarray, max_samples: int, seed: int) -> np.ndarray:
+    indices = np.where(mask)[0]
+    if max_samples <= 0 or len(indices) <= max_samples:
+        return indices
+    rng = np.random.RandomState(seed)
+    return np.sort(rng.choice(indices, size=max_samples, replace=False))
+
+
+def _plot_prototype_relevance(
+    output_dir: str,
+    class_id: int,
+    prototype_id: int,
+    freqs: np.ndarray,
+    mean_signed: np.ndarray,
+    mean_abs: np.ndarray,
+) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
+    colors = ["tab:red", "tab:green", "tab:blue"]
+
+    for axis_idx, axis_name in enumerate(AXIS_NAMES[:mean_signed.shape[0]]):
+        axes[0].plot(freqs, mean_signed[axis_idx], color=colors[axis_idx], label=axis_name)
+        axes[1].plot(freqs, mean_abs[axis_idx], color=colors[axis_idx], label=axis_name)
+
+    for ax in axes:
+        for _, low, high in DEFAULT_CNC_BANDS:
+            ax.axvspan(low, high, alpha=0.06, color="grey")
+        ax.set_xlim(0, min(200, freqs.max()))
+        ax.set_xlabel("Frequency (Hz)")
+        ax.legend()
+
+    axes[0].set_title("Mean signed DFT relevance")
+    axes[0].set_ylabel("Relevance")
+    axes[1].set_title("Mean absolute DFT relevance")
+    axes[1].set_ylabel("|Relevance|")
+    fig.suptitle(f"Class {class_id} prototype {prototype_id}: DFT-LRP frequency relevance")
+    fig.tight_layout()
+
+    path = os.path.join(output_dir, f"class{class_id}_prototype{prototype_id}_dft_relevance.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Prototype-conditioned DFT-LRP frequency relevance analysis"
+    )
+    parser.add_argument('--data', required=True, help='Path to CNC data directory')
+    parser.add_argument('--features', required=True, help='Path to CRP feature directory from run_analysis.py')
+    parser.add_argument('--concepts', required=True, help='Path to Variant C output directory')
+    parser.add_argument('--output', default='results/frequency_relevance', help='Output directory')
+    parser.add_argument('--sample-rate', type=float, default=400.0, help='Sampling rate in Hz')
+    parser.add_argument('--eps', type=float, default=1e-6, help='DFT-LRP division stabilizer')
+    parser.add_argument('--max-samples-per-prototype', type=int, default=250,
+                        help='Subsample per prototype for speed; <=0 uses all samples')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for subsampling')
+    parser.add_argument('--renormalize', action='store_true',
+                        help='Scale frequency relevance sums to match time relevance sums')
+    args = parser.parse_args()
+
+    os.makedirs(args.output, exist_ok=True)
+
+    results, tcd = _load_concepts(args.concepts)
+    features = np.asarray(results['features'], dtype=np.float64)
+    concept_labels = np.asarray(results['labels'], dtype=int)
+
+    heatmaps, heatmap_labels, sample_ids = _load_heatmaps_and_sample_ids(args.features)
+    if len(features) != len(heatmaps):
+        raise ValueError(
+            f"Feature/heatmap mismatch: {len(features)} CRVs vs {len(heatmaps)} heatmaps. "
+            "Use matching run_analysis and discover_concepts outputs."
+        )
+    if not np.array_equal(concept_labels, heatmap_labels):
+        print("Warning: concept labels differ from heatmap labels; using concept labels for assignments.")
+
+    dataset = VibrationDataset(args.data)
+    raw_signals, dataset_labels = _load_raw_signals(dataset, sample_ids)
+    if not np.array_equal(dataset_labels, heatmap_labels):
+        print("Warning: dataset labels from sample IDs differ from heatmap labels.")
+
+    global_assign, local_assign, assignment_classes = _assign_per_class_prototypes(
+        features, concept_labels, tcd
+    )
+    valid = global_assign >= 0
+    if valid.sum() == 0:
+        raise ValueError("No valid prototype assignments found in tcd_model.pkl")
+
+    summary_rows: List[Dict[str, float]] = []
+    conservation_rows: List[Dict[str, float]] = []
+
+    prototype_keys = sorted({
+        (int(assignment_classes[i]), int(local_assign[i]), int(global_assign[i]))
+        for i in np.where(valid)[0]
+    })
+
+    print(f"Analyzing {len(prototype_keys)} prototypes")
+    for class_id, proto_id, global_proto_id in prototype_keys:
+        proto_mask = (assignment_classes == class_id) & (local_assign == proto_id)
+        proto_indices = _choose_indices(proto_mask, args.max_samples_per_prototype, args.seed)
+        if len(proto_indices) == 0:
+            continue
+
+        print(
+            f"Class {class_id}, prototype {proto_id} "
+            f"(global {global_proto_id}): {len(proto_indices)} samples"
+        )
+
+        per_axis_signed: List[List[np.ndarray]] = [[] for _ in range(raw_signals.shape[1])]
+        per_axis_abs: List[List[np.ndarray]] = [[] for _ in range(raw_signals.shape[1])]
+        freqs_ref = None
+
+        for sample_index in proto_indices:
+            for axis_idx in range(raw_signals.shape[1]):
+                freqs, freq_rel, diagnostics = dft_lrp_frequency_relevance(
+                    signal=raw_signals[sample_index, axis_idx],
+                    relevance=heatmaps[sample_index, axis_idx],
+                    sample_rate=args.sample_rate,
+                    eps=args.eps,
+                    one_sided=True,
+                    renormalize=args.renormalize,
+                )
+                freqs_ref = freqs
+                per_axis_signed[axis_idx].append(freq_rel)
+                per_axis_abs[axis_idx].append(np.abs(freq_rel))
+                conservation_rows.append({
+                    "sample_feature_index": int(sample_index),
+                    "dataset_sample_id": int(sample_ids[sample_index]),
+                    "class_id": int(class_id),
+                    "prototype_id": int(proto_id),
+                    "global_prototype_id": int(global_proto_id),
+                    "axis": AXIS_NAMES[axis_idx] if axis_idx < len(AXIS_NAMES) else str(axis_idx),
+                    **diagnostics,
+                })
+
+        mean_signed = np.stack([
+            np.mean(np.stack(axis_values, axis=0), axis=0)
+            for axis_values in per_axis_signed
+        ])
+        mean_abs = np.stack([
+            np.mean(np.stack(axis_values, axis=0), axis=0)
+            for axis_values in per_axis_abs
+        ])
+
+        _plot_prototype_relevance(
+            args.output, class_id, proto_id, freqs_ref, mean_signed, mean_abs
+        )
+
+        for axis_idx in range(mean_abs.shape[0]):
+            axis_name = AXIS_NAMES[axis_idx] if axis_idx < len(AXIS_NAMES) else str(axis_idx)
+            peak_idx = int(np.argmax(mean_abs[axis_idx]))
+            row: Dict[str, float] = {
+                "class_id": int(class_id),
+                "prototype_id": int(proto_id),
+                "global_prototype_id": int(global_proto_id),
+                "axis": axis_name,
+                "n_samples": int(len(proto_indices)),
+                "peak_freq_hz_abs_relevance": float(freqs_ref[peak_idx]),
+                "total_abs_relevance": float(np.sum(mean_abs[axis_idx])),
+                "total_signed_relevance": float(np.sum(mean_signed[axis_idx])),
+            }
+            row.update(band_relevance(freqs_ref, mean_abs[axis_idx], DEFAULT_CNC_BANDS, use_absolute=True))
+            summary_rows.append(row)
+
+    summary_path = os.path.join(args.output, "prototype_frequency_relevance.csv")
+    if summary_rows:
+        with open(summary_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(summary_rows)
+    print(f"Saved prototype frequency relevance summary to {summary_path}")
+
+    conservation_path = os.path.join(args.output, "conservation_check.csv")
+    if conservation_rows:
+        with open(conservation_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(conservation_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(conservation_rows)
+    print(f"Saved conservation diagnostics to {conservation_path}")
+
+    print(f"\n✓ DFT-LRP prototype frequency relevance analysis complete: {args.output}")
+
+
+if __name__ == "__main__":
+    main()
