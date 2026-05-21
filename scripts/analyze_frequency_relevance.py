@@ -147,12 +147,38 @@ def _load_raw_signals(dataset: VibrationDataset, sample_ids: np.ndarray) -> Tupl
     return np.stack(signals, axis=0), np.asarray(labels, dtype=int)
 
 
-def _choose_indices(mask: np.ndarray, max_samples: int, seed: int) -> np.ndarray:
-    indices = np.where(mask)[0]
-    if max_samples <= 0 or len(indices) <= max_samples:
-        return indices
-    rng = np.random.RandomState(seed)
-    return np.sort(rng.choice(indices, size=max_samples, replace=False))
+def _get_closest_samples(
+    features: np.ndarray,
+    proto_mask: np.ndarray,
+    proto_centroid: np.ndarray,
+    max_samples: int,
+) -> np.ndarray:
+    """
+    Select samples closest to prototype centroid in feature space.
+    
+    Args:
+        features: Feature matrix (N, n_features)
+        proto_mask: Boolean mask for samples assigned to this prototype
+        proto_centroid: Prototype centroid (n_features,)
+        max_samples: Max samples to return; <=0 returns all
+        
+    Returns:
+        Indices of closest samples (sorted)
+    """
+    proto_indices = np.where(proto_mask)[0]
+    
+    if max_samples <= 0 or len(proto_indices) <= max_samples:
+        return proto_indices
+    
+    # Compute distances to centroid for samples in this prototype
+    proto_features = features[proto_indices]
+    distances = np.linalg.norm(proto_features - proto_centroid[None, :], axis=1)
+    
+    # Select closest max_samples by distance
+    closest_relative_idx = np.argsort(distances)[:max_samples]
+    closest_absolute_idx = proto_indices[closest_relative_idx]
+    
+    return np.sort(closest_absolute_idx)
 
 
 def _compute_frequency_relevance(
@@ -212,6 +238,7 @@ def _plot_prototype_relevance(
     mean_signed: np.ndarray,
     mean_abs: np.ndarray,
     method: str,
+    n_samples: int,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
     colors = ["tab:red", "tab:green", "tab:blue"]
@@ -231,7 +258,7 @@ def _plot_prototype_relevance(
     axes[0].set_ylabel("Relevance")
     axes[1].set_title(f"Mean absolute relevance ({method})")
     axes[1].set_ylabel("|Relevance|")
-    fig.suptitle(f"Class {class_id} prototype {prototype_id}: frequency relevance")
+    fig.suptitle(f"Class {class_id} proto {prototype_id}: frequency relevance (n={n_samples})")
     fig.tight_layout()
 
     path = os.path.join(
@@ -251,9 +278,8 @@ def main():
     parser.add_argument('--output', default='results/frequency_relevance', help='Output directory')
     parser.add_argument('--sample-rate', type=float, default=400.0, help='Sampling rate in Hz')
     parser.add_argument('--eps', type=float, default=1e-6, help='Division stabilizer')
-    parser.add_argument('--max-samples-per-prototype', type=int, default=250,
-                        help='Subsample per prototype for speed; <=0 uses all samples')
-    parser.add_argument('--seed', type=int, default=0, help='Random seed for subsampling')
+    parser.add_argument('--max-samples-per-prototype', type=int, default=0,
+                        help='Max samples per prototype (by distance-to-centroid); 0=use all')
     parser.add_argument('--renormalize', action='store_true',
                         help='Scale frequency relevance sums to match time relevance sums')
     parser.add_argument('--method', default='dft_lrp',
@@ -297,23 +323,46 @@ def main():
 
     summary_rows: List[Dict[str, float]] = []
     conservation_rows: List[Dict[str, float]] = []
+    prototype_stats: List[Dict[str, int]] = []
 
     prototype_keys = sorted({
         (int(assignment_classes[i]), int(local_assign[i]), int(global_assign[i]))
         for i in np.where(valid)[0]
     })
 
-    print(f"Analyzing {len(prototype_keys)} prototypes")
+    print(f"\nAnalyzing {len(prototype_keys)} prototypes")
+    print(f"Sampling strategy: closest {args.max_samples_per_prototype if args.max_samples_per_prototype > 0 else 'all'} samples to centroid\n")
+    
     for class_id, proto_id, global_proto_id in prototype_keys:
         proto_mask = (assignment_classes == class_id) & (local_assign == proto_id)
-        proto_indices = _choose_indices(proto_mask, args.max_samples_per_prototype, args.seed)
+        n_total = proto_mask.sum()
+        
+        # Get prototype centroid from GMM
+        gmms = getattr(tcd.prototype_discovery, "gmms", {})
+        proto_centroid = gmms[class_id].means_[proto_id]
+        
+        # Select closest samples
+        proto_indices = _get_closest_samples(
+            features, proto_mask, proto_centroid, args.max_samples_per_prototype
+        )
+        
         if len(proto_indices) == 0:
             continue
 
+        n_used = len(proto_indices)
         print(
-            f"Class {class_id}, prototype {proto_id} "
-            f"(global {global_proto_id}): {len(proto_indices)} samples"
+            f"Class {class_id}, prototype {proto_id} (global {global_proto_id}): "
+            f"{n_used}/{n_total} samples (closest by centroid distance)"
         )
+        
+        prototype_stats.append({
+            "class_id": class_id,
+            "prototype_id": proto_id,
+            "global_prototype_id": global_proto_id,
+            "n_total_assigned": n_total,
+            "n_analyzed": n_used,
+            "pct_used": 100.0 * n_used / max(1, n_total),
+        })
 
         per_axis_signed: List[List[np.ndarray]] = [[] for _ in range(raw_signals.shape[1])]
         per_axis_abs: List[List[np.ndarray]] = [[] for _ in range(raw_signals.shape[1])]
@@ -356,7 +405,7 @@ def main():
         ])
 
         _plot_prototype_relevance(
-            args.output, class_id, proto_id, freqs_ref, mean_signed, mean_abs, args.method
+            args.output, class_id, proto_id, freqs_ref, mean_signed, mean_abs, args.method, n_used
         )
 
         for axis_idx in range(mean_abs.shape[0]):
@@ -367,7 +416,8 @@ def main():
                 "prototype_id": int(proto_id),
                 "global_prototype_id": int(global_proto_id),
                 "axis": axis_name,
-                "n_samples": int(len(proto_indices)),
+                "n_samples_analyzed": int(n_used),
+                "n_samples_assigned": int(n_total),
                 "method": args.method,
                 "peak_freq_hz_abs_relevance": float(freqs_ref[peak_idx]),
                 "total_abs_relevance": float(np.sum(mean_abs[axis_idx])),
@@ -375,6 +425,15 @@ def main():
             }
             row.update(band_relevance(freqs_ref, mean_abs[axis_idx], DEFAULT_CNC_BANDS, use_absolute=True))
             summary_rows.append(row)
+
+    # Save prototype statistics
+    stats_path = os.path.join(args.output, "prototype_sampling_stats.csv")
+    if prototype_stats:
+        with open(stats_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(prototype_stats[0].keys()))
+            writer.writeheader()
+            writer.writerows(prototype_stats)
+        print(f"\nSaved prototype statistics to {stats_path}")
 
     summary_path = os.path.join(
         args.output, f"prototype_frequency_relevance_{args.method}.csv"
