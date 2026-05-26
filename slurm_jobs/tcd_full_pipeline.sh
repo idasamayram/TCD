@@ -67,14 +67,14 @@ apptainer exec --nv \
     cd /workspace/TCD
 
     # 1) CRP feature extraction
-    echo "[$(date)] Step 1/10: CRP feature extraction..."
+    echo "[$(date)] Step 1/11: CRP feature extraction..."
     python scripts/run_analysis.py \
       --config configs/variantC_conv3_reference.yaml \
       --data /workspace/data \
       --output /workspace/out/crp_features
 
     # 2) Variant C concept discovery (reference conv3)
-    echo "[$(date)] Step 2/10: Variant C concept discovery..."
+    echo "[$(date)] Step 2/11: Variant C concept discovery..."
     python scripts/discover_concepts.py \
       --config configs/variantC_conv3_reference.yaml \
       --variant C \
@@ -84,7 +84,7 @@ apptainer exec --nv \
       --data /workspace/data
 
     # 3) Concept evaluation
-    echo "[$(date)] Step 3/10: Concept evaluation..."
+    echo "[$(date)] Step 3/11: Concept evaluation..."
     python scripts/evaluate_concepts.py \
       --config configs/variantC_conv3_reference.yaml \
       --concepts /workspace/out/variantC_conv3 \
@@ -93,7 +93,7 @@ apptainer exec --nv \
       --output /workspace/out/evaluation_conv3
 
     # 4) PSD baseline (prototype spectral energy)
-    echo "[$(date)] Step 4/10: PSD baseline analysis..."
+    echo "[$(date)] Step 4/11: PSD baseline analysis..."
     python scripts/analyze_frequency.py \
       --data /workspace/data \
       --features /workspace/out/crp_features \
@@ -101,7 +101,7 @@ apptainer exec --nv \
       --output /workspace/out/frequency_psd
 
     # 5) DFT-LRP prototype-conditioned relevance
-    echo "[$(date)] Step 5/10: DFT-LRP frequency relevance..."
+    echo "[$(date)] Step 5/11: DFT-LRP frequency relevance..."
     python scripts/analyze_frequency_relevance.py \
       --data /workspace/data \
       --features /workspace/out/crp_features \
@@ -111,7 +111,7 @@ apptainer exec --nv \
       --max-samples-per-prototype 0
 
     # 6) VIL IDFT prototype-conditioned relevance (NEW: distance-to-centroid)
-    echo "[$(date)] Step 6/10: VIL IDFT frequency relevance..."
+    echo "[$(date)] Step 6/11: VIL IDFT frequency relevance..."
     python scripts/analyze_frequency_relevance.py \
       --data /workspace/data \
       --features /workspace/out/crp_features \
@@ -121,7 +121,7 @@ apptainer exec --nv \
       --max-samples-per-prototype 0
 
     # 7) VIL STDFT prototype-conditioned relevance (NEW: time-frequency)
-    echo "[$(date)] Step 7/10: VIL STDFT frequency relevance..."
+    echo "[$(date)] Step 7/11: VIL STDFT frequency relevance..."
     python scripts/analyze_frequency_relevance.py \
       --data /workspace/data \
       --features /workspace/out/crp_features \
@@ -134,7 +134,7 @@ apptainer exec --nv \
       --vil-window-shape rectangle
 
     # 8) Layer sweep summary (conv1..conv4)
-    echo "[$(date)] Step 8/10: Layer sweep analysis..."
+    echo "[$(date)] Step 8/11: Layer sweep analysis..."
     python scripts/run_layer_sweep.py \
       --config configs/variantC_conv3_reference.yaml \
       --features /workspace/out/crp_features \
@@ -144,19 +144,28 @@ apptainer exec --nv \
       --run-discovery
 
     # 9) Metadata analysis
-    echo "[$(date)] Step 9/10: Metadata analysis..."
+    echo "[$(date)] Step 9/11: Metadata analysis..."
     python scripts/analyze_metadata.py \
       --data /workspace/data \
       --concepts /workspace/out/variantC_conv3 \
       --output /workspace/out/metadata
 
     # 10) Pruning: relevance-only baseline
-    echo "[$(date)] Step 10/10: Pruning analysis..."
+    echo "[$(date)] Step 10/11: Pruning analysis..."
     python scripts/prune_model.py \
       --model ./cnn1d_model_new.ckpt \
       --features /workspace/out/crp_features \
       --data /workspace/data \
       --output /workspace/out/pruning_relevance
+
+    # 11) Frequency analysis visualizations (NEW)
+    echo "[$(date)] Step 11/11: Frequency analysis visualizations..."
+    python scripts/visualize_frequency_analysis.py \
+      --methods-dir /workspace/out/frequency_relevance_dft_lrp \
+                    /workspace/out/frequency_relevance_vil_idft \
+                    /workspace/out/frequency_relevance_vil_stdft \
+      --concepts /workspace/out/variantC_conv3 \
+      --output /workspace/out/frequency_visualizations
 
     echo "[$(date)] All pipeline steps complete."
   '
