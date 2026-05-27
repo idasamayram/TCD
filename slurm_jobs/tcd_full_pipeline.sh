@@ -73,6 +73,24 @@ apptainer exec --nv \
       --data /workspace/data \
       --output /workspace/out/crp_features
 
+    # Verify CRP feature files exist for BOTH classes
+    echo "[$(date)] Verifying CRP feature files..."
+    for class_id in 0 1; do
+      if [ ! -f /workspace/out/crp_features/eps_relevances_class_${class_id}.hdf5 ]; then
+        echo "ERROR: Missing eps_relevances_class_${class_id}.hdf5" >&2
+        exit 1
+      fi
+      if [ ! -f /workspace/out/crp_features/heatmaps_class_${class_id}.hdf5 ]; then
+        echo "ERROR: Missing heatmaps_class_${class_id}.hdf5" >&2
+        exit 1
+      fi
+      if [ ! -f /workspace/out/crp_features/sample_ids_class_${class_id}.pt ]; then
+        echo "ERROR: Missing sample_ids_class_${class_id}.pt" >&2
+        exit 1
+      fi
+      echo "  ✓ Class ${class_id} feature files verified"
+    done
+
     # 2) Variant C concept discovery (reference conv3)
     echo "[$(date)] Step 2/11: Variant C concept discovery..."
     python scripts/discover_concepts.py \
@@ -86,9 +104,11 @@ apptainer exec --nv \
     # Check if discovery succeeded
     if [ ! -f /workspace/out/variantC_conv3/tcd_model.pkl ]; then
       echo "ERROR: discover_concepts.py failed - tcd_model.pkl not created" >&2
-      echo "Check /workspace/out/discover_concepts.log for details" >&2
+      echo "Last 50 lines of discover_concepts.log:" >&2
+      tail -50 /workspace/out/discover_concepts.log >&2
       exit 1
     fi
+    echo "✓ discover_concepts completed successfully"
 
     # 3) Concept evaluation
     echo "[$(date)] Step 3/11: Concept evaluation..."
