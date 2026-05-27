@@ -96,7 +96,6 @@ apptainer exec --nv \
     python scripts/discover_concepts.py \
       --config configs/variantC_conv3_reference.yaml \
       --variant C \
-      --model /workspace/TCD/cnn1d_model_new.ckpt \
       --features /workspace/out/crp_features \
       --output /workspace/out/variantC_conv3 \
       --layer conv4 \
