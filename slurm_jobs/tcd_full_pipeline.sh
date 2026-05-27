@@ -81,7 +81,14 @@ apptainer exec --nv \
       --features /workspace/out/crp_features \
       --output /workspace/out/variantC_conv3 \
       --layer conv3 \
-      --data /workspace/data
+      --data /workspace/data 2>&1 | tee /workspace/out/discover_concepts.log
+    
+    # Check if discovery succeeded
+    if [ ! -f /workspace/out/variantC_conv3/tcd_model.pkl ]; then
+      echo "ERROR: discover_concepts.py failed - tcd_model.pkl not created" >&2
+      echo "Check /workspace/out/discover_concepts.log for details" >&2
+      exit 1
+    fi
 
     # 3) Concept evaluation
     echo "[$(date)] Step 3/11: Concept evaluation..."
