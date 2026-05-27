@@ -26,8 +26,8 @@ tcd:
   primary_layer: "conv3"
   n_prototypes: 3
   use_bic_selection: true
-  bic_range: [1, 2, 3, 4]
-  top_k_samples: 6
+  bic_range: [1, 2, 3, 4,  5, 6, 7, 8, 9, 10]
+  top_k_samples: 10
   gmm_covariance: "diag"
   gmm_n_init: 5
   gmm_max_iter: 200
@@ -43,7 +43,7 @@ tcd:
 
 intervention:
   method: "suppress"
-  target_layer: "conv3"
+  target_layer: "conv4"
   concept_indices: []
 
 evaluation:
