@@ -371,9 +371,27 @@ def plot_prototype_samples(
             ax.plot(time, signal[c], 'k-', linewidth=1, alpha=0.7)
             
             # Overlay heatmap
+
             heatmap_flat = heatmap.flatten()
+
+
+            vmax = np.abs(heatmap_flat).max()
+            vmax = max(vmax, 1e-6)  # prevent zero vmax
+
+            # Also use percentile clipping to avoid outliers dominating
+            vmax = np.percentile(np.abs(heatmap_flat), 99)
+            vmax = max(vmax, 1e-6)
+            norm = Normalize(vmin=-vmax, vmax=vmax)
+
+
+
+            '''
+            # previous setup, wrong color
             vmax = np.abs(heatmap_flat).max()
             norm = Normalize(vmin=-vmax, vmax=vmax)
+            '''
+
+
             heat_colors = plt.cm.get_cmap(cmap)(norm(heatmap[c]))
             
             for t in range(len(time) - 1):
@@ -449,8 +467,21 @@ def plot_prototype_gallery(
                 ax.plot(time, signal[c], 'k-', linewidth=0.8, alpha=0.7)
                 
                 # Heatmap overlay
+                '''
+                #previous wrong heatmap
                 vmax = np.abs(heatmap).max()
                 norm = Normalize(vmin=-vmax, vmax=vmax)
+                '''
+
+                vmax = np.abs(heatmap).max()
+                vmax = max(vmax, 1e-6)  # prevent zero vmax
+
+                # Also use percentile clipping to avoid outliers dominating
+                vmax = np.percentile(np.abs(heatmap), 99)
+                vmax = max(vmax, 1e-6)
+                norm = Normalize(vmin=-vmax, vmax=vmax)
+
+
                 heat_colors = plt.cm.get_cmap(cmap)(norm(heatmap[c]))
                 
                 for t in range(len(time) - 1):
