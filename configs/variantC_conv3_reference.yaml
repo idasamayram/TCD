@@ -26,7 +26,7 @@ tcd:
   primary_layer: "conv4"
   n_prototypes: 3
   use_bic_selection: true
-  bic_range: [1, 2, 3, 4,  5]
+  bic_range: [1, 2, 3]
   top_k_samples: 15
   gmm_covariance: "diag"
   gmm_n_init: 5

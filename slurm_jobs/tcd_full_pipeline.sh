@@ -201,7 +201,7 @@ apptainer exec --nv \
             --concepts /workspace/out/variantC_conv3 \
             --output /workspace/out/frequency_relevance_vil_stdft \
             --method vil_stdft \
-            --max-samples-per-prototype 0 \
+            --max-samples-per-prototype 50 \
             --vil-window-width 128 \
             --vil-window-shift 64 \
             --vil-window-shape rectangle
