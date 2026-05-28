@@ -28,6 +28,7 @@ from typing import Dict, Tuple, List, Iterable
 import numpy as np
 
 
+
 def stabilized_divisor(signal: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Return ``signal`` with small values replaced by signed ``eps``."""
     signal = np.asarray(signal, dtype=np.float64)
@@ -159,6 +160,8 @@ def create_window_mask(
     return w_mn.transpose((1, 0))  # (N, n_windows)
 
 
+'''
+#older version n_nodes=1
 def vil_stdft_frequency_relevance(
     signal: np.ndarray,
     relevance: np.ndarray,
@@ -237,6 +240,119 @@ def vil_stdft_frequency_relevance(
         "frequency_relevance_sum_full": float(np.sum(diag_freq_sums)) if diag_freq_sums else 0.0,
         "conservation_error": float(np.mean(diag_errors)) if diag_errors else 0.0,
         "n_windows": int(n_windows),
+    }
+
+    if freqs_ref is None:
+        freqs_ref = np.fft.fftfreq(signal.shape[0], d=1.0 / sample_rate)
+        if one_sided:
+            freqs_ref = freqs_ref[freqs_ref >= 0]
+
+    return freqs_ref, relevance_tf, diagnostics
+    '''
+
+
+# parallelized version
+def vil_stdft_frequency_relevance(
+    signal: np.ndarray,
+    relevance: np.ndarray,
+    sample_rate: float = 400.0,
+    eps: float = 1e-6,
+    one_sided: bool = True,
+    renormalize: bool = False,
+    window_width: int = 128,
+    window_shift: int | None = None,
+    window_shape: str = "rectangle",
+    n_jobs: int = -1,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, float]]:
+    """
+    Compute STDFT-style frequency relevance using VIL per time window.
+
+    This mirrors the CNC defaults:
+        window_width = 128
+        window_shift = window_width // 2 (if None)
+        window_shape = "rectangle"
+
+    Args:
+        n_jobs: Number of parallel jobs for joblib.
+                -1 = use all available CPUs (default).
+                 1 = no parallelism (original behaviour, useful for debugging).
+
+    Returns:
+        freqs: Frequency bins (one-sided if requested)
+        relevance_tf: Array of shape (n_windows, n_freqs)
+        diagnostics: Aggregate diagnostics (mean conservation error, etc.)
+    """
+    from joblib import Parallel, delayed
+
+    signal = np.asarray(signal, dtype=np.float64).reshape(-1)
+    relevance = np.asarray(relevance, dtype=np.float64).reshape(-1)
+    if signal.shape != relevance.shape:
+        raise ValueError(
+            f"signal and relevance must have the same shape, got "
+            f"{signal.shape} and {relevance.shape}"
+        )
+
+    if window_shift is None:
+        window_shift = window_width // 2
+
+    if window_shape not in WINDOWS:
+        raise ValueError(
+            f"window_shape must be one of {list(WINDOWS.keys())}, got {window_shape}"
+        )
+
+    window_fn = WINDOWS[window_shape]
+    w_mn = create_window_mask(window_shift, window_width, signal.shape[0], window_fn)
+    n_windows = w_mn.shape[1]
+
+    # ------------------------------------------------------------------
+    # Worker: process one window and return (freqs, freq_rel, diagnostics)
+    # ------------------------------------------------------------------
+    def _process_window(w_idx: int):
+        window = w_mn[:, w_idx]
+        signal_w   = signal    * window
+        relevance_w = relevance * window
+        freqs, freq_rel, diag = vil_idft_frequency_relevance(
+            signal=signal_w,
+            relevance=relevance_w,
+            sample_rate=sample_rate,
+            eps=eps,
+            one_sided=one_sided,
+            renormalize=renormalize,
+        )
+        return freqs, freq_rel, diag
+
+    # ------------------------------------------------------------------
+    # Run windows in parallel; results come back in submission order
+    # because joblib preserves order by default.
+    # ------------------------------------------------------------------
+    results = Parallel(n_jobs=n_jobs, prefer="threads")(
+        delayed(_process_window)(w_idx) for w_idx in range(n_windows)
+    )
+    # results is a list of (freqs, freq_rel, diag) tuples, one per window
+
+    # ------------------------------------------------------------------
+    # Unpack results — same structure as the original serial loop
+    # ------------------------------------------------------------------
+    all_relevances: List[np.ndarray] = []
+    diag_errors:    List[float]      = []
+    diag_time_sums: List[float]      = []
+    diag_freq_sums: List[float]      = []
+    freqs_ref = None
+
+    for freqs, freq_rel, diag in results:
+        freqs_ref = freqs                                   # same for every window
+        all_relevances.append(freq_rel)
+        diag_errors.append(diag["conservation_error"])
+        diag_time_sums.append(diag["time_relevance_sum"])
+        diag_freq_sums.append(diag["frequency_relevance_sum_full"])
+
+    relevance_tf = np.stack(all_relevances, axis=0) if all_relevances else np.zeros((0, 0))
+
+    diagnostics = {
+        "time_relevance_sum":          float(np.sum(diag_time_sums))  if diag_time_sums else 0.0,
+        "frequency_relevance_sum_full": float(np.sum(diag_freq_sums)) if diag_freq_sums else 0.0,
+        "conservation_error":          float(np.mean(diag_errors))    if diag_errors    else 0.0,
+        "n_windows":                   int(n_windows),
     }
 
     if freqs_ref is None:
