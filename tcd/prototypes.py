@@ -183,6 +183,8 @@ class TemporalPrototypeDiscovery:
                         features_for_gmm = np.concatenate(oversampled, axis=0)
                         print(f"Class {class_id}: Oversampled by {oversample_factor}x due to class weight {weight:.2f}")
             
+            '''
+            #diag
             # Fit GMM
             gmm = GaussianMixture(
                 n_components=n_proto,
@@ -191,6 +193,18 @@ class TemporalPrototypeDiscovery:
                 max_iter=self.max_iter,
                 random_state=self.random_state,
                 init_params='kmeans',
+                verbose=2
+            )
+            '''
+            # full
+            gmm = GaussianMixture(
+                n_components=n_proto,
+                covariance_type=self.covariance_type,
+                n_init=self.n_init,
+                max_iter=self.max_iter,
+                random_state=self.random_state,
+                init_params='kmeans',
+                reg_covar=1e-4,  # ADD THIS — regularizes covariance to prevent singularity
                 verbose=2
             )
             
@@ -384,7 +398,8 @@ class TemporalPrototypeDiscovery:
         n_init: int = 5,
         max_iter: int = 200,
         random_state: int = 0,
-        criterion: str = 'bic'
+        criterion: str = 'bic',
+        reg_covar = 1e-4   # for full GMM fitting
     ) -> Tuple[int, Dict[int, float]]:
         """
         Select optimal number of prototypes using BIC or AIC.
@@ -419,7 +434,9 @@ class TemporalPrototypeDiscovery:
                 n_init=n_init,
                 max_iter=max_iter,
                 random_state=random_state,
-                init_params='kmeans'
+                init_params='kmeans',
+                reg_covar=reg_covar    # for full gmm
+
             )
             
             gmm.fit(features_np)
