@@ -1284,8 +1284,17 @@ def plot_umap_prototypes(
     ax.set_title("By Prototype Assignment")
     ax.set_xlabel(f"{method_name} 1")
     ax.set_ylabel(f"{method_name} 2")
+
+    # In plot_umap_prototypes, the right panel legend:
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(markerscale=2, fontsize=7, ncol=3,  # increase ncol
+                  loc='lower right',  # move out of the data area
+                  bbox_to_anchor=(1.0, 0.0))
+
+    '''
     if ax.get_legend_handles_labels()[1]:
         ax.legend(markerscale=2, fontsize=8, ncol=2)
+        '''
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
