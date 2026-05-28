@@ -83,7 +83,7 @@ apptainer exec --nv \
     # -------------------------------------------------------------------------
     run_step "Step 1/11: CRP feature extraction" \
       python scripts/run_analysis.py \
-        --config  configs/variantC_conv3_reference.yaml \
+        --config  configs/variantC_conv2_full.yaml \
         --model   /workspace/TCD/cnn1d_model_new.ckpt \
         --data    /workspace/data \
         --output  /workspace/out/crp_features
@@ -115,11 +115,11 @@ apptainer exec --nv \
     if [ "${CRP_OK}" = true ]; then
       run_step "Step 2/11: Variant C concept discovery" \
         python scripts/discover_concepts.py \
-          --config  configs/variantC_conv3_reference.yaml \
+          --config  configs/variantC_conv2_full.yaml \
           --variant C \
           --features /workspace/out/crp_features \
-          --output   /workspace/out/variantC_conv3 \
-          --layer    conv3 \
+          --output   /workspace/out/variantC_conv2 \
+          --layer    conv2 \
           --data     /workspace/data
     else
       echo "[$(date)] ✗ Skipping Step 2/11 — CRP features missing"
@@ -128,37 +128,37 @@ apptainer exec --nv \
     # -------------------------------------------------------------------------
     # Step 3: Concept evaluation
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 3/11: Concept evaluation"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 3/11: Concept evaluation"; then
       run_step "Step 3/11: Concept evaluation" \
         python scripts/evaluate_concepts.py \
-          --config   configs/variantC_conv3_reference.yaml \
-          --concepts /workspace/out/variantC_conv3 \
+          --config   configs/variantC_conv2_full.yaml \
+          --concepts /workspace/out/variantC_conv2 \
           --model    /workspace/TCD/cnn1d_model_new.ckpt \
           --data     /workspace/data \
-          --output   /workspace/out/evaluation_conv3
+          --output   /workspace/out/evaluation_conv2
     fi
 
     # -------------------------------------------------------------------------
     # Step 4: PSD baseline
     # Note: analyze_frequency.py does NOT accept --features
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 4/11: PSD baseline"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 4/11: PSD baseline"; then
       run_step "Step 4/11: PSD baseline analysis" \
         python scripts/analyze_frequency.py \
           --data     /workspace/data \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/variantC_conv2 \
           --output   /workspace/out/frequency_psd
     fi
 
     # -------------------------------------------------------------------------
     # Step 5: DFT-LRP frequency relevance
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 5/11: DFT-LRP"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 5/11: DFT-LRP"; then
       run_step "Step 5/11: DFT-LRP frequency relevance" \
         python scripts/analyze_frequency_relevance.py \
           --data     /workspace/data \
           --features /workspace/out/crp_features \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/2 \
           --output   /workspace/out/frequency_relevance_dft_lrp \
           --method   dft_lrp \
           --max-samples-per-prototype 50
@@ -167,12 +167,12 @@ apptainer exec --nv \
     # -------------------------------------------------------------------------
     # Step 6: VIL IDFT frequency relevance
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 6/11: VIL IDFT"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 6/11: VIL IDFT"; then
       run_step "Step 6/11: VIL IDFT frequency relevance" \
         python scripts/analyze_frequency_relevance.py \
           --data     /workspace/data \
           --features /workspace/out/crp_features \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/variantC_conv2 \
           --output   /workspace/out/frequency_relevance_vil_idft \
           --method   vil_idft \
           --max-samples-per-prototype 50
@@ -182,12 +182,12 @@ apptainer exec --nv \
     # Step 7: VIL STDFT frequency relevance
     # Capped at 50 samples per prototype — using all samples takes many hours.
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 7/11: VIL STDFT"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 7/11: VIL STDFT"; then
       run_step "Step 7/11: VIL STDFT frequency relevance" \
         python scripts/analyze_frequency_relevance.py \
           --data     /workspace/data \
           --features /workspace/out/crp_features \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/variantC_conv2 \
           --output   /workspace/out/frequency_relevance_vil_stdft \
           --method   vil_stdft \
           --max-samples-per-prototype 50 \
@@ -202,7 +202,7 @@ apptainer exec --nv \
     if [ "${CRP_OK}" = true ]; then
       run_step "Step 8/11: Layer sweep analysis" \
         python scripts/run_layer_sweep.py \
-          --config       configs/variantC_conv3_reference.yaml \
+          --config       configs/variantC_conv2_full.yaml \
           --features     /workspace/out/crp_features \
           --data         /workspace/data \
           --output-root  /workspace/out/layer_sweep \
@@ -215,11 +215,11 @@ apptainer exec --nv \
     # -------------------------------------------------------------------------
     # Step 9: Metadata analysis
     # -------------------------------------------------------------------------
-    if need /workspace/out/variantC_conv3/tcd_model.pkl "Step 9/11: Metadata analysis"; then
+    if need /workspace/out/variantC_conv2/tcd_model.pkl "Step 9/11: Metadata analysis"; then
       run_step "Step 9/11: Metadata analysis" \
         python scripts/analyze_metadata.py \
           --data     /workspace/data \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/variantC_conv2 \
           --output   /workspace/out/metadata
     fi
 
@@ -248,7 +248,7 @@ apptainer exec --nv \
             /workspace/out/frequency_relevance_dft_lrp \
             /workspace/out/frequency_relevance_vil_idft \
             /workspace/out/frequency_relevance_vil_stdft \
-          --concepts /workspace/out/variantC_conv3 \
+          --concepts /workspace/out/variantC_conv2 \
           --output   /workspace/out/frequency_visualizations
     fi
 
