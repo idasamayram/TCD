@@ -38,7 +38,7 @@ apptainer exec --nv \
         /workspace/out/frequency_relevance_dft_lrp \
         /workspace/out/frequency_relevance_vil_idft \
         /workspace/out/frequency_relevance_vil_stdft \
-      --concepts /workspace/out/variantC_conv3 \
+      --concepts /workspace/out/variantC_conv4 \
       --output   /workspace/out/frequency_visualizations
   "
 

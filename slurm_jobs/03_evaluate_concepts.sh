@@ -34,10 +34,11 @@ apptainer exec --nv \
 
     python scripts/evaluate_concepts.py \
       --config   ${CONFIG} \
-      --concepts /workspace/out/variantC_conv3 \
+      --concepts /workspace/out/variantC_conv4 \
       --model    ${MODEL} \
+      --layer   conv4 \
       --data     /workspace/data \
-      --output   /workspace/out/evaluation_conv3
+      --output   /workspace/out/evaluation_conv4
   "
 
 echo "[$(date)] ✓ Step 3 complete. Results: ${EVALUATION}"

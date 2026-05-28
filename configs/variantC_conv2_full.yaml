@@ -23,7 +23,7 @@ analysis:
 
 tcd:
   variant: "C"
-  primary_layer: "conv2"
+  primary_layer: "conv4"
   n_prototypes: 5
   n_prototypes_per_class:
     0: 5                       # OK: 3 prototypes
@@ -49,7 +49,7 @@ tcd:
 
 intervention:
   method: "suppress"
-  target_layer: "conv2"
+  target_layer: "conv4"
   concept_indices: []
 
 evaluation:

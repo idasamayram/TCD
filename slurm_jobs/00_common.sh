@@ -7,7 +7,7 @@ PROJECT_DIR="${PROJECT_DIR:-$SLURM_SUBMIT_DIR}"
 CONTAINER_SIF="${CONTAINER_SIF:-${PROJECT_DIR}/container/tcd.sif}"
 DATA_DIR="/data/datapool3/datasets/asadi/TCD/data"
 MODEL="/workspace/TCD/cnn1d_model_new.ckpt"
-CONFIG="configs/variantC_conv3_reference.yaml"
+CONFIG="configs/variantC_conv2_full.yaml"
 
 # All steps write to the same output root on the shared filesystem.
 # Override by setting RESULTS_DIR before submitting, e.g.:
@@ -17,8 +17,8 @@ mkdir -p "${RESULTS_DIR}"
 
 # Convenience paths used by multiple steps
 CRP_FEATURES="${RESULTS_DIR}/crp_features"
-CONCEPTS_CONV3="${RESULTS_DIR}/variantC_conv3"
-EVALUATION="${RESULTS_DIR}/evaluation_conv3"
+CONCEPTS_CONV3="${RESULTS_DIR}/variantC_conv4"
+EVALUATION="${RESULTS_DIR}/evaluation_conv4"
 FREQ_PSD="${RESULTS_DIR}/frequency_psd"
 FREQ_DFT="${RESULTS_DIR}/frequency_relevance_dft_lrp"
 FREQ_IDFT="${RESULTS_DIR}/frequency_relevance_vil_idft"

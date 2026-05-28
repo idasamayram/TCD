@@ -32,7 +32,7 @@ apptainer exec --nv \
 
     python scripts/analyze_metadata.py \
       --data     /workspace/data \
-      --concepts /workspace/out/variantC_conv3 \
+      --concepts /workspace/out/variantC_conv4 \
       --output   /workspace/out/metadata
   "
 

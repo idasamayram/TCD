@@ -38,7 +38,7 @@ apptainer exec --nv \
       --variant  C \
       --features /workspace/out/crp_features \
       --output   /workspace/out/variantC_conv3 \
-      --layer    conv3 \
+      --layer    conv4 \
       --data     /workspace/data
 
     if [ ! -f /workspace/out/variantC_conv3/tcd_model.pkl ]; then

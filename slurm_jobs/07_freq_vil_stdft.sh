@@ -36,7 +36,7 @@ apptainer exec --nv \
     python scripts/analyze_frequency_relevance.py \
       --data     /workspace/data \
       --features /workspace/out/crp_features \
-      --concepts /workspace/out/variantC_conv3 \
+      --concepts /workspace/out/variantC_conv4 \
       --output   /workspace/out/frequency_relevance_vil_stdft \
       --method   vil_stdft \
       --max-samples-per-prototype 50 \
