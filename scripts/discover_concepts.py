@@ -315,13 +315,25 @@ def run_variant_c(
         print("\nAuto-selecting optimal n_prototypes using BIC...")
         from tcd.prototypes import TemporalPrototypeDiscovery
         
+        '''
+        # changing this for a class based bic selection
         # Get BIC range from config
         bic_range = config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         min_n = min(bic_range)
         max_n = max(bic_range)
+        '''
+
+
         
         # Validate BIC range against sample sizes
         for class_id in [0, 1]:
+            # for now we do class based bic selection
+            class_key = f'bic_range_class{class_id}'
+            bic_range = config['tcd'].get(class_key, config['tcd'].get('bic_range', [1, 2, 3, 4, 5, 6, 7]))
+            min_n = min(bic_range)
+            max_n = max(bic_range)
+
+
             class_mask = (labels == class_id) & (outputs.argmax(dim=1) == class_id)
             n_class_samples = class_mask.sum().item()
             max_reasonable = n_class_samples // 10
@@ -366,7 +378,9 @@ def run_variant_c(
                 covariance_type=config['tcd'].get('gmm_covariance', 'diag'),
                 n_init=config['tcd'].get('gmm_n_init', 5),
                 max_iter=config['tcd'].get('gmm_max_iter', 200),
-                criterion='bic'
+                criterion='bic',
+                reg_covar=config['tcd'].get('gmm_reg_covar', 1e-4)  # ADD THIS for full GMM
+
             )
             optimal_n_dict[class_id] = optimal_n
             
@@ -380,9 +394,24 @@ def run_variant_c(
         print(f"BIC-optimal prototypes (per class): OK={optimal_n_dict.get(0, 'N/A')}, NOK={optimal_n_dict.get(1, 'N/A')}")
         print(f"  If BIC says 1 per class, that's valid - means one strategy per class")
         print(f"{'='*60}")
+
+    else:
+        # Fixed number from config — supports per-class or global
+        per_class_config = config['tcd'].get('n_prototypes_per_class', None)
+        if per_class_config is not None:
+            n_prototypes = {int(k): int(v) for k, v in per_class_config.items()}
+            print(f"\nUsing fixed n_prototypes per class: {n_prototypes}")
+        else:
+            n_prototypes = config['tcd'].get('n_prototypes', 3)
+            print(f"\nUsing fixed n_prototypes={n_prototypes} for all classes")
+
+
+    '''
+    # here n_proto is similar for both class
     else:
         n_prototypes = config['tcd']['n_prototypes']
         print(f"\nUsing configured n_prototypes={n_prototypes}")
+    '''
     
     # Initialize LearnedClusterTCD with updated defaults
     tcd = LearnedClusterTCD(
@@ -655,7 +684,22 @@ def run_variant_c(
                 assignments = tcd.assign_prototype(
                     features[labels == class_id], class_id
                 )
-                proto_assignments[class_mask] = assignments + class_id * gmm.n_components
+                # proto_assignments[class_mask] = assignments + class_id * gmm.n_components
+
+                offset = 0
+                for cid in [0, 1]:
+                    if cid not in tcd.prototype_discovery.gmms:
+                        continue
+                    gmm = tcd.prototype_discovery.gmms[cid]
+                    class_mask = labels_np == cid
+                    class_feat = features[labels == cid]
+                    if len(class_feat) > 0:
+                        assignments = tcd.assign_prototype(class_feat, cid)
+                        proto_assignments[class_mask] = assignments + offset
+                    gmm_means_dict[cid] = gmm.means_
+                    offset += gmm.n_components  # accumulate correctly
+
+
             gmm_means_dict[class_id] = gmm.means_
 
         fig_umap = plot_umap_prototypes(
