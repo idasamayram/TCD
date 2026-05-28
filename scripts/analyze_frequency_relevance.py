@@ -278,7 +278,7 @@ def main():
     parser.add_argument('--output', default='results/frequency_relevance', help='Output directory')
     parser.add_argument('--sample-rate', type=float, default=400.0, help='Sampling rate in Hz')
     parser.add_argument('--eps', type=float, default=1e-6, help='Division stabilizer')
-    parser.add_argument('--max-samples-per-prototype', type=int, default=0,
+    parser.add_argument('--max-samples-per-prototype', type=int, default=50,
                         help='Max samples per prototype (by distance-to-centroid); 0=use all')
     parser.add_argument('--renormalize', action='store_true',
                         help='Scale frequency relevance sums to match time relevance sums')
