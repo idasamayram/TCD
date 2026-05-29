@@ -13,6 +13,9 @@ Usage:
 """
 import sys
 from pathlib import Path
+
+from scipy.stats import spearmanr
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
@@ -382,7 +385,82 @@ def evaluate_variant_c(
                 if len(common) == top_k:
                     print(f"  ⚠ WARNING: All {len(all_top_filters)} prototypes share the same "
                           f"top-{top_k} filters {sorted(common)}. Prototype diversity is low.")
-    
+
+    # After existing prototype intervention loop
+    print("\n" + "=" * 60)
+    print("WITHIN-PROTOTYPE FAITHFULNESS")
+    print("=" * 60)
+
+    for class_id in [0, 1]:
+        if class_id not in tcd.prototype_discovery.gmms:
+            continue
+
+        gmm = tcd.prototype_discovery.gmms[class_id]
+        class_mask = labels == class_id
+        class_features = features[class_mask]
+        class_assignments = tcd.assign_prototype(class_features, class_id)
+
+        # Get dataset indices for this class
+        class_dataset_indices = [i for i, (_, lbl)
+                                 in enumerate(dataset) if int(lbl) == class_id]
+
+        class_name = "OK" if class_id == 0 else "NOK"
+        print(f"\nClass {class_id} ({class_name}):")
+
+        for proto_idx in range(gmm.n_components):
+            proto_mask = class_assignments == proto_idx
+            proto_sample_positions = np.where(proto_mask)[0]
+            n_proto_samples = len(proto_sample_positions)
+
+            if n_proto_samples == 0:
+                continue
+
+            # Get actual dataset indices for this prototype's samples
+            proto_dataset_indices = [class_dataset_indices[i]
+                                     for i in proto_sample_positions
+                                     if i < len(class_dataset_indices)]
+
+            # CRP relevances for this prototype's samples only
+            proto_crp = class_features[proto_mask]  # (n_proto, n_filters)
+            proto_relevance = proto_crp.abs().mean(dim=0).numpy()  # per-filter mean relevance
+
+            # Intervention on this prototype's samples only
+            proto_subset = torch.utils.data.Subset(
+                dataset, proto_dataset_indices[:min(100, len(proto_dataset_indices))]
+            )
+            proto_importance = measure_concept_importance(
+                model=model,
+                dataset=proto_subset,
+                layer_name=layer_name,
+                n_concepts=features.shape[1],
+                target_class=class_id,
+                method='suppress',
+                batch_size=config['analysis']['batch_size']
+            )
+
+            # Faithfulness: do prototype's defining filters have high importance
+            # for prototype's own samples?
+            proto_mean = gmm.means_[proto_idx]
+            top_k_indices = np.argsort(np.abs(proto_mean))[-5:]
+
+            # Spearman correlation between CRP relevance and intervention importance
+            # for this prototype's samples
+            corr, _ = spearmanr(proto_relevance, proto_importance)
+
+            # How much does suppressing this prototype's filters hurt its own samples?
+            proto_filter_importance = proto_importance[top_k_indices].mean()
+            other_filter_importance = np.delete(proto_importance, top_k_indices).mean()
+            specificity = proto_filter_importance / (other_filter_importance + 1e-10)
+
+            print(f"  Prototype {proto_idx} ({n_proto_samples} samples):")
+            print(f"    Within-prototype faithfulness: {corr:.3f}")
+            print(f"    Proto-filter importance: {proto_filter_importance:.4f}")
+            print(f"    Other-filter importance: {other_filter_importance:.4f}")
+            print(f"    Specificity ratio: {specificity:.2f}x")
+
+
+
+
     # Compute evaluation metrics
     print("\n" + "="*60)
     
