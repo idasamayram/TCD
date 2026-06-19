@@ -34,6 +34,21 @@ from tcd.variants.vibration_features import VibrationFeatureTCD
 from tcd.visualization import plot_prototype_grid, plot_concept_relevance
 
 
+def normalize_cli_path(path: str) -> str:
+    """
+    Normalize user-supplied command-line/config paths across operating systems.
+
+    On POSIX systems, a Windows-style backslash is a literal filename character,
+    not a separator.  Replacing both separator styles with the local separator
+    prevents paths such as ``results\\crp_features`` from being joined into
+    ``results\\crp_features/eps_relevances_class_0.hdf5`` and missing files that
+    actually live under ``results/crp_features``.
+    """
+    if path is None:
+        return None
+    return os.path.normpath(path.replace("\\", os.sep).replace("/", os.sep))
+
+
 def load_config(config_path: str) -> dict:
     """Load YAML configuration."""
     with open(config_path, 'r') as f:
@@ -1194,25 +1209,32 @@ def main():
     
     args = parser.parse_args()
     
+    # Normalize CLI/config paths so Windows-style backslashes also work on Linux
+    # clusters where these scripts are typically executed.
+    config_path = normalize_cli_path(args.config)
+    features_path = normalize_cli_path(args.features)
+    output_path = normalize_cli_path(args.output)
+
     # Load config
-    config = load_config(args.config)
+    config = load_config(config_path)
     
     # Get data path from args or config
     data_path = args.data or config.get('data', {}).get('path', None)
+    data_path = normalize_cli_path(data_path) if data_path else None
     
     # Run appropriate variant
     if args.variant == 'A':
-        run_variant_a(args.features, args.output, config, use_window_based=args.window_based)
+        run_variant_a(features_path, output_path, config, use_window_based=args.window_based)
     elif args.variant == 'B':
-        run_variant_b(args.features, args.output, config)
+        run_variant_b(features_path, output_path, config)
     elif args.variant == 'C':
         run_variant_c(
-            args.features, args.output, config,
+            features_path, output_path, config,
             layer_name=args.layer, data_path=data_path,
             joint_gmm=args.joint_gmm,
         )
     elif args.variant == 'D':
-        run_variant_d(args.features, args.output, config, data_path=data_path)
+        run_variant_d(features_path, output_path, config, data_path=data_path)
 
 
 if __name__ == "__main__":
