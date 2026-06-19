@@ -8,6 +8,7 @@ Replaces crp.image.imgify and vis_opaque_img with signal plotting.
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 from typing import List, Optional, Tuple, Union, Dict, Any
@@ -1740,6 +1741,247 @@ def plot_concept_prototype_matrix(
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
     cbar.set_label("μ × 100 (% contribution)", fontsize=9)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_pcx_prediction_strategy_map(
+    features: np.ndarray,
+    labels: np.ndarray,
+    prototype_assignments: np.ndarray,
+    gmm_means: Dict[int, np.ndarray],
+    class_names: Dict[int, str] = {0: "OK", 1: "NOK"},
+    filter_names: Optional[List[str]] = None,
+    gmm_covariances: Optional[Dict[int, np.ndarray]] = None,
+    figsize: Tuple[int, int] = (14, 10),
+    n_top_concepts: int = 4,
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    random_state: int = 42
+) -> plt.Figure:
+    """
+    PCX-style prediction strategy map for 1D time-series concept relevance vectors.
+
+    This figure adapts the PCX paper's prototype intuition plot to temporal data:
+    samples are projected from CRP concept-relevance-vector (CRV) space into 2D,
+    colored by class/prototype, and annotated with GMM component centers.  The
+    side panel lists the strongest filters/concepts defining each prototype, so
+    the plot can be used to inspect what the clusters represent even when raw
+    time-domain signals do not show an obvious visual signature.
+
+    Args:
+        features: CRV feature matrix of shape (N, n_filters).
+        labels: Class labels of shape (N,).
+        prototype_assignments: Global prototype ID per sample, shape (N,).
+            IDs should be offset across classes, e.g. class 0 proto 0..K0-1,
+            class 1 proto K0..K0+K1-1.
+        gmm_means: Dict mapping class_id -> GMM means, shape
+            (n_prototypes_for_class, n_filters).
+        class_names: Mapping from class ID to display name.
+        filter_names: Optional display labels for filter/concept dimensions.
+        gmm_covariances: Optional dict of original-space GMM covariances.  These
+            are reported in the summary table when available; 2D ellipses are
+            estimated from embedded samples assigned to each prototype.
+        figsize: Figure size.
+        n_top_concepts: Number of strongest concepts to list per prototype.
+        n_neighbors: UMAP n_neighbors parameter.
+        min_dist: UMAP min_dist parameter.
+        random_state: Random seed for reproducibility.
+
+    Returns:
+        Matplotlib figure containing the strategy map and prototype summaries.
+    """
+    features = np.asarray(features, dtype=np.float32)
+    labels = np.asarray(labels)
+    prototype_assignments = np.asarray(prototype_assignments)
+
+    means_list = []
+    mean_meta: List[Tuple[int, int, int]] = []
+    offset = 0
+    for class_id in sorted(gmm_means):
+        means = np.asarray(gmm_means[class_id], dtype=np.float32)
+        for proto_idx in range(means.shape[0]):
+            means_list.append(means[proto_idx])
+            mean_meta.append((int(class_id), int(proto_idx), int(offset + proto_idx)))
+        offset += means.shape[0]
+
+    all_points = features if not means_list else np.vstack([features, np.vstack(means_list)])
+
+    try:
+        import umap
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            random_state=random_state
+        )
+        method_name = "UMAP"
+    except ImportError:
+        from sklearn.decomposition import PCA
+        reducer = PCA(n_components=2, random_state=random_state)
+        method_name = "PCA"
+
+    embedding = reducer.fit_transform(all_points)
+    feat_emb = embedding[:len(features)]
+    mean_emb = embedding[len(features):] if means_list else np.empty((0, 2))
+
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, height_ratios=[3.0, 1.7], width_ratios=[2.2, 1.3])
+    ax_map = fig.add_subplot(gs[0, 0])
+    ax_summary = fig.add_subplot(gs[0, 1])
+    ax_matrix = fig.add_subplot(gs[1, :])
+
+    fig.suptitle(
+        f"PCX-style Prediction Strategy Map ({method_name} of CRP concept relevances)",
+        fontsize=15,
+        fontweight='bold'
+    )
+
+    proto_cmap = plt.get_cmap('tab20')
+    class_markers = {0: 'o', 1: '^'}
+
+    for class_id in sorted(np.unique(labels)):
+        class_proto_ids = sorted(np.unique(prototype_assignments[(labels == class_id) & (prototype_assignments >= 0)]))
+        for global_proto_id in class_proto_ids:
+            mask = (labels == class_id) & (prototype_assignments == global_proto_id)
+            if not np.any(mask):
+                continue
+            color = proto_cmap(int(global_proto_id) % proto_cmap.N)
+            ax_map.scatter(
+                feat_emb[mask, 0],
+                feat_emb[mask, 1],
+                s=24,
+                alpha=0.55,
+                color=color,
+                marker=class_markers.get(int(class_id), 'o'),
+                edgecolors='none',
+                label=f"{class_names.get(int(class_id), f'class {class_id}')} P{global_proto_id}"
+            )
+
+            # Draw a 2D covariance ellipse from assigned embedded samples.  This
+            # visualizes cluster spread in the displayed manifold/PCA plane.
+            emb_points = feat_emb[mask]
+            if emb_points.shape[0] >= 3:
+                cov2d = np.cov(emb_points, rowvar=False)
+                vals, vecs = np.linalg.eigh(cov2d)
+                vals = np.maximum(vals, 1e-8)
+                order = vals.argsort()[::-1]
+                vals, vecs = vals[order], vecs[:, order]
+                angle = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+                center = emb_points.mean(axis=0)
+                for scale, alpha in [(2.0, 0.14), (1.0, 0.22)]:
+                    ellipse = Ellipse(
+                        xy=center,
+                        width=2 * scale * np.sqrt(vals[0]),
+                        height=2 * scale * np.sqrt(vals[1]),
+                        angle=angle,
+                        facecolor=color,
+                        edgecolor=color,
+                        alpha=alpha,
+                        linewidth=1.2,
+                        zorder=1
+                    )
+                    ax_map.add_patch(ellipse)
+
+    # Overlay GMM centers projected together with samples.
+    for mean_idx, (class_id, proto_idx, global_proto_id) in enumerate(mean_meta):
+        color = proto_cmap(global_proto_id % proto_cmap.N)
+        ax_map.scatter(
+            mean_emb[mean_idx, 0],
+            mean_emb[mean_idx, 1],
+            marker='s',
+            s=130,
+            color=color,
+            edgecolors='black',
+            linewidths=1.2,
+            zorder=5
+        )
+        ax_map.text(
+            mean_emb[mean_idx, 0],
+            mean_emb[mean_idx, 1],
+            f" μ{class_id}.{proto_idx}",
+            fontsize=9,
+            fontweight='bold',
+            va='bottom',
+            ha='left'
+        )
+
+    ax_map.set_title("Concept-relevance clusters and prototype centers")
+    ax_map.set_xlabel(f"{method_name} 1")
+    ax_map.set_ylabel(f"{method_name} 2")
+    ax_map.grid(True, alpha=0.25)
+    handles, legend_labels = ax_map.get_legend_handles_labels()
+    if handles:
+        ax_map.legend(handles, legend_labels, fontsize=7, ncol=2, loc='best')
+
+    # Textual prototype interpretation panel.
+    ax_summary.axis('off')
+    summary_lines = ["Prototype signatures", "top |μ| filters in CRV space", ""]
+    for class_id, proto_idx, global_proto_id in mean_meta:
+        mean_vec = np.asarray(gmm_means[class_id][proto_idx])
+        top_idx = np.argsort(np.abs(mean_vec))[-n_top_concepts:][::-1]
+        n_assigned = int(np.sum(prototype_assignments == global_proto_id))
+        total_class = int(np.sum(labels == class_id))
+        coverage = 100.0 * n_assigned / max(total_class, 1)
+        summary_lines.append(
+            f"{class_names.get(class_id, f'class {class_id}')} μ{proto_idx} "
+            f"(P{global_proto_id}, {coverage:.1f}%):"
+        )
+        for idx in top_idx:
+            name = filter_names[idx] if filter_names and idx < len(filter_names) else f"F{idx}"
+            summary_lines.append(f"  {name}: {mean_vec[idx] * 100:+.2f}%")
+        if gmm_covariances is not None and class_id in gmm_covariances:
+            cov = np.asarray(gmm_covariances[class_id][proto_idx])
+            diag = cov if cov.ndim == 1 else np.diag(cov)
+            summary_lines.append(f"  spread: {float(np.mean(diag)):.2e}")
+        summary_lines.append("")
+
+    ax_summary.text(
+        0.0,
+        1.0,
+        "\n".join(summary_lines),
+        transform=ax_summary.transAxes,
+        va='top',
+        ha='left',
+        fontsize=9,
+        family='monospace'
+    )
+
+    # Bottom: compact concept-prototype matrix across all prototypes.
+    if means_list:
+        all_means = np.vstack(means_list)
+        top_k = min(max(n_top_concepts * 2, 6), all_means.shape[1])
+        top_concepts = np.argsort(np.max(np.abs(all_means), axis=0))[-top_k:][::-1]
+        matrix = all_means[:, top_concepts].T * 100
+        vmax = float(np.max(np.abs(matrix))) if matrix.size else 1.0
+        if vmax == 0:
+            vmax = 1.0
+        im = ax_matrix.imshow(matrix, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        ax_matrix.set_title("Most characteristic concept/filter relevances per prototype")
+        ax_matrix.set_xlabel("Prototype center")
+        ax_matrix.set_ylabel("Concept/filter")
+        ax_matrix.set_xticks(np.arange(len(mean_meta)))
+        ax_matrix.set_xticklabels([f"μ{cid}.{pid}" for cid, pid, _ in mean_meta], rotation=0)
+        ax_matrix.set_yticks(np.arange(len(top_concepts)))
+        ax_matrix.set_yticklabels([
+            filter_names[i] if filter_names and i < len(filter_names) else f"F{i}"
+            for i in top_concepts
+        ])
+        for row in range(matrix.shape[0]):
+            for col in range(matrix.shape[1]):
+                val = matrix[row, col]
+                ax_matrix.text(
+                    col,
+                    row,
+                    f"{val:+.1f}",
+                    ha='center',
+                    va='center',
+                    fontsize=7,
+                    color='white' if abs(val) > 0.55 * vmax else 'black'
+                )
+        cbar = fig.colorbar(im, ax=ax_matrix, shrink=0.85, pad=0.01)
+        cbar.set_label("prototype μ × 100")
 
     plt.tight_layout()
     return fig

@@ -528,6 +528,36 @@ python scripts/evaluate_concepts.py \
     --output results/evaluation
 ```
 
+### Inspect What Decisive Filters Capture
+
+After Variant C identifies prototype-defining filters, create reference-window
+galleries directly from the discovered GMM prototypes:
+
+```bash
+python scripts/visualize_filter_templates.py \
+    --config configs/default.yaml \
+    --concepts results/concepts_C \
+    --layer conv3 \
+    --prototype-class 1 \
+    --prototype-id 0 \
+    --n-filters 6 \
+    --top-k 8 \
+    --output results/filter_templates_conv3
+```
+
+Use `--filters 3,17,42` only when you want to override the automatic selection
+with filter IDs read manually from a PCX-style plot.  The sample rate defaults to
+`data.sample_rate` in the config; override it with `--sample-rate` only if the
+config does not match the data.
+
+Each generated filter gallery shows:
+- the `--top-k` input windows that maximally activate the filter,
+- the filter activation trace and selected activation position,
+- an average time-domain template over the top windows,
+- the dominant spectrum/peak frequency of the selected windows, and
+- a CSV summary that can be used to name concepts such as “impulsive burst,”
+  “high-frequency oscillation,” or “slow drift.”
+
 ---
 
 ## Troubleshooting
