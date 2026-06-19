@@ -34,6 +34,21 @@ from tcd.variants.vibration_features import VibrationFeatureTCD
 from tcd.visualization import plot_prototype_grid, plot_concept_relevance
 
 
+def normalize_cli_path(path: str) -> str:
+    """
+    Normalize user-supplied command-line/config paths across operating systems.
+
+    On POSIX systems, a Windows-style backslash is a literal filename character,
+    not a separator.  Replacing both separator styles with the local separator
+    prevents paths such as ``results\\crp_features`` from being joined into
+    ``results\\crp_features/eps_relevances_class_0.hdf5`` and missing files that
+    actually live under ``results/crp_features``.
+    """
+    if path is None:
+        return None
+    return os.path.normpath(path.replace("\\", os.sep).replace("/", os.sep))
+
+
 def load_config(config_path: str) -> dict:
     """Load YAML configuration."""
     with open(config_path, 'r') as f:
@@ -674,33 +689,16 @@ def run_variant_c(
         # Build per-sample prototype assignments across all classes
         proto_assignments = np.full(len(features_np), -1, dtype=int)
         gmm_means_dict = {}
-        for class_id in [0, 1]:
-            if class_id not in tcd.prototype_discovery.gmms:
-                continue
+        offset = 0
+        for class_id in sorted(tcd.prototype_discovery.gmms):
             gmm = tcd.prototype_discovery.gmms[class_id]
-            class_mask = labels_np == class_id
-            class_feat = features_np[class_mask]
-            if len(class_feat) > 0:
-                assignments = tcd.assign_prototype(
-                    features[labels == class_id], class_id
-                )
-                # proto_assignments[class_mask] = assignments + class_id * gmm.n_components
-
-                offset = 0
-                for cid in [0, 1]:
-                    if cid not in tcd.prototype_discovery.gmms:
-                        continue
-                    gmm = tcd.prototype_discovery.gmms[cid]
-                    class_mask = labels_np == cid
-                    class_feat = features[labels == cid]
-                    if len(class_feat) > 0:
-                        assignments = tcd.assign_prototype(class_feat, cid)
-                        proto_assignments[class_mask] = assignments + offset
-                    gmm_means_dict[cid] = gmm.means_
-                    offset += gmm.n_components  # accumulate correctly
-
-
+            class_mask_np = labels_np == class_id
+            class_features = features[labels == class_id]
+            if len(class_features) > 0:
+                assignments = tcd.assign_prototype(class_features, class_id)
+                proto_assignments[class_mask_np] = assignments + offset
             gmm_means_dict[class_id] = gmm.means_
+            offset += gmm.n_components
 
         fig_umap = plot_umap_prototypes(
             features=features_np,
@@ -714,6 +712,46 @@ def run_variant_c(
         print(f"  Saved UMAP/PCA plot to {umap_path}")
     except Exception as e:
         print(f"  Warning: Could not generate UMAP visualization: {e}")
+
+    # PCX-style prediction strategy map for interpreting GMM clusters
+    if not joint_gmm:
+        print("\nGenerating PCX-style prediction strategy map...")
+        try:
+            from tcd.visualization import plot_pcx_prediction_strategy_map
+
+            features_np = features.numpy() if hasattr(features, 'numpy') else np.array(features)
+            labels_np = labels.numpy() if hasattr(labels, 'numpy') else np.array(labels)
+            proto_assignments = np.full(len(features_np), -1, dtype=int)
+            gmm_means_dict = {}
+            gmm_covariances_dict = {}
+
+            offset = 0
+            for class_id in sorted(tcd.prototype_discovery.gmms):
+                gmm = tcd.prototype_discovery.gmms[class_id]
+                class_mask_np = labels_np == class_id
+                class_features = features[labels == class_id]
+                if len(class_features) > 0:
+                    assignments = tcd.assign_prototype(class_features, class_id)
+                    proto_assignments[class_mask_np] = assignments + offset
+                gmm_means_dict[class_id] = gmm.means_
+                gmm_covariances_dict[class_id] = gmm.covariances_
+                offset += gmm.n_components
+
+            fig_strategy = plot_pcx_prediction_strategy_map(
+                features=features_np,
+                labels=labels_np,
+                prototype_assignments=proto_assignments,
+                gmm_means=gmm_means_dict,
+                gmm_covariances=gmm_covariances_dict,
+                filter_names=[f"F{i}" for i in range(features.shape[1])],
+                n_top_concepts=config['tcd'].get('top_k_filters', 4)
+            )
+            strategy_path = os.path.join(output_path, 'pcx_prediction_strategy_map.png')
+            fig_strategy.savefig(strategy_path, dpi=180, bbox_inches='tight')
+            plt.close(fig_strategy)
+            print(f"  Saved PCX-style prediction strategy map to {strategy_path}")
+        except Exception as e:
+            print(f"  Warning: Could not generate PCX-style prediction strategy map: {e}")
 
     # Joint-GMM UMAP (only when --joint-gmm was used)
     if joint_gmm and joint_gmm_result is not None:
@@ -1171,25 +1209,32 @@ def main():
     
     args = parser.parse_args()
     
+    # Normalize CLI/config paths so Windows-style backslashes also work on Linux
+    # clusters where these scripts are typically executed.
+    config_path = normalize_cli_path(args.config)
+    features_path = normalize_cli_path(args.features)
+    output_path = normalize_cli_path(args.output)
+
     # Load config
-    config = load_config(args.config)
+    config = load_config(config_path)
     
     # Get data path from args or config
     data_path = args.data or config.get('data', {}).get('path', None)
+    data_path = normalize_cli_path(data_path) if data_path else None
     
     # Run appropriate variant
     if args.variant == 'A':
-        run_variant_a(args.features, args.output, config, use_window_based=args.window_based)
+        run_variant_a(features_path, output_path, config, use_window_based=args.window_based)
     elif args.variant == 'B':
-        run_variant_b(args.features, args.output, config)
+        run_variant_b(features_path, output_path, config)
     elif args.variant == 'C':
         run_variant_c(
-            args.features, args.output, config,
+            features_path, output_path, config,
             layer_name=args.layer, data_path=data_path,
             joint_gmm=args.joint_gmm,
         )
     elif args.variant == 'D':
-        run_variant_d(args.features, args.output, config, data_path=data_path)
+        run_variant_d(features_path, output_path, config, data_path=data_path)
 
 
 if __name__ == "__main__":
