@@ -528,6 +528,30 @@ python scripts/evaluate_concepts.py \
     --output results/evaluation
 ```
 
+### Inspect What Decisive Filters Capture
+
+After Variant C identifies prototype-defining filters (for example `F3`, `F17`,
+and `F42` in the PCX-style plots), create reference-window galleries for those
+filters:
+
+```bash
+python scripts/visualize_filter_templates.py \
+    --model cnn1d_model_final.ckpt \
+    --data ./data \
+    --layer conv3 \
+    --filters 3,17,42 \
+    --sample-rate 1000 \
+    --output results/filter_templates_conv3
+```
+
+Each generated filter gallery shows:
+- top input windows that maximally activate the filter,
+- the filter activation trace and selected activation position,
+- an average time-domain template over the top windows,
+- the dominant spectrum/peak frequency of the selected windows, and
+- a CSV summary that can be used to name concepts such as “impulsive burst,”
+  “high-frequency oscillation,” or “slow drift.”
+
 ---
 
 ## Troubleshooting

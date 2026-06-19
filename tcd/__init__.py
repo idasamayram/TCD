@@ -25,6 +25,7 @@ from .visualization import (
     plot_attribution_graph,
     plot_robustness_summary,
     plot_pcx_prototype_concept_grid,
+    plot_pcx_prediction_strategy_map,
     plot_umap_prototypes,
     plot_umap_metadata,
     plot_concept_prototype_matrix
@@ -87,6 +88,7 @@ __all__ = [
     'plot_attribution_graph',
     'plot_robustness_summary',
     'plot_pcx_prototype_concept_grid',
+    'plot_pcx_prediction_strategy_map',
     'plot_umap_prototypes',
     'plot_umap_metadata',
     'plot_concept_prototype_matrix',
