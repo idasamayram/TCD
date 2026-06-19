@@ -17,7 +17,6 @@ For each requested filter/channel at a convolutional layer it:
 import argparse
 import csv
 import os
-import pickle
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -28,7 +27,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import yaml
 from torch.utils.data import DataLoader
 
 from models.cnn1d_model import CNN1D_Wide, VibrationDataset
@@ -45,19 +43,6 @@ def parse_filter_ids(filters: str) -> List[int]:
     if not parsed:
         raise ValueError("At least one filter id must be provided.")
     return parsed
-
-
-def load_config(config_path: str) -> dict:
-    """Load a YAML config, returning an empty dict if no config path is provided."""
-    if not config_path:
-        return {}
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f) or {}
-
-
-def get_config_value(config: dict, section: str, key: str, default=None):
-    """Safely read ``config[section][key]`` with a default."""
-    return config.get(section, {}).get(key, default)
 
 
 def load_model(model_path: str, device: torch.device) -> CNN1D_Wide:
@@ -77,69 +62,6 @@ def load_model(model_path: str, device: torch.device) -> CNN1D_Wide:
     model.to(device)
     model.eval()
     return model
-
-
-def select_filters_from_concepts(
-    concepts_dir: str,
-    layer_name: str,
-    n_filters: int,
-    prototype_class: Optional[int] = None,
-    prototype_id: Optional[int] = None
-) -> List[int]:
-    """
-    Select decisive filters directly from Variant C GMM prototype means.
-
-    If ``prototype_class`` and ``prototype_id`` are provided, filters are selected
-    from that single prototype. Otherwise the score for each filter is the max
-    absolute prototype mean across all available class/prototype centers.
-    """
-    tcd_path = Path(concepts_dir) / "tcd_model.pkl"
-    results_path = Path(concepts_dir) / "results.pkl"
-    if not tcd_path.exists():
-        raise FileNotFoundError(f"Missing Variant C model at {tcd_path}")
-
-    if results_path.exists():
-        with results_path.open("rb") as f:
-            results = pickle.load(f)
-        result_layer = results.get("layer_name")
-        if result_layer and result_layer != layer_name:
-            print(
-                f"Warning: concepts were discovered on layer '{result_layer}', "
-                f"but --layer is '{layer_name}'. Use the same layer for filter templates."
-            )
-
-    with tcd_path.open("rb") as f:
-        tcd = pickle.load(f)
-
-    gmms = getattr(getattr(tcd, "prototype_discovery", None), "gmms", {})
-    if not gmms:
-        raise ValueError("No per-class GMMs found in tcd_model.pkl. Run Variant C without --joint-gmm.")
-
-    if prototype_class is not None:
-        if prototype_class not in gmms:
-            raise KeyError(f"Class {prototype_class} not found in GMMs. Available classes: {sorted(gmms)}")
-        gmm = gmms[prototype_class]
-        if prototype_id is None:
-            scores = np.max(np.abs(gmm.means_), axis=0)
-        else:
-            if prototype_id >= gmm.means_.shape[0]:
-                raise IndexError(
-                    f"Prototype {prototype_id} out of range for class {prototype_class} "
-                    f"with {gmm.means_.shape[0]} prototypes."
-                )
-            scores = np.abs(gmm.means_[prototype_id])
-    else:
-        if prototype_id is not None:
-            raise ValueError("--prototype-id requires --prototype-class.")
-        scores = np.max(
-            np.vstack([np.abs(gmm.means_) for gmm in gmms.values()]),
-            axis=0
-        )
-
-    top = np.argsort(scores)[-n_filters:][::-1]
-    selected = [int(idx) for idx in top]
-    print(f"Selected filters from {concepts_dir}: {selected}")
-    return selected
 
 
 def get_named_module(model: nn.Module, layer_name: str) -> nn.Module:
@@ -439,60 +361,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create reference-window galleries for decisive 1D CNN filters."
     )
-    parser.add_argument("--config", default="configs/default.yaml", help="Config path for model/data/sample_rate defaults.")
-    parser.add_argument("--model", default=None, help="Path to trained CNN1D_Wide checkpoint; defaults to config model.path.")
-    parser.add_argument("--data", default=None, help="Dataset directory; defaults to config data.path.")
-    parser.add_argument("--concepts", default=None, help="Variant C output directory containing tcd_model.pkl/results.pkl.")
+    parser.add_argument("--model", required=True, help="Path to trained CNN1D_Wide checkpoint.")
+    parser.add_argument("--data", required=True, help="Path to dataset directory with good/bad subfolders.")
     parser.add_argument("--layer", default="conv3", help="Convolutional layer to inspect, e.g. conv2/conv3/conv4.")
-    parser.add_argument("--filters", default=None, help="Optional comma-separated filter IDs, e.g. 3,17,42.")
-    parser.add_argument("--prototype-class", type=int, default=None, choices=[0, 1],
-                        help="When --concepts is used, select filters from this class GMM only.")
-    parser.add_argument("--prototype-id", type=int, default=None,
-                        help="When --concepts and --prototype-class are used, select filters from one prototype.")
-    parser.add_argument("--n-filters", type=int, default=6,
-                        help="Number of decisive filters to auto-select from --concepts.")
+    parser.add_argument("--filters", required=True, help="Comma-separated filter IDs from PCX plots, e.g. 3,17,42.")
     parser.add_argument("--output", default="results/filter_templates", help="Output directory.")
-    parser.add_argument("--top-k", type=int, default=8,
-                        help="Number of top-activating dataset samples/windows used to create each template.")
+    parser.add_argument("--top-k", type=int, default=8, help="Top activation windows to show per filter.")
     parser.add_argument("--window-size", type=int, default=256, help="Minimum input-window size in samples.")
-    parser.add_argument("--sample-rate", type=float, default=None, help="Sample rate in Hz; defaults to config data.sample_rate.")
+    parser.add_argument("--sample-rate", type=float, default=1000.0, help="Sample rate in Hz for spectra.")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for activation scan.")
     parser.add_argument("--class-id", type=int, default=None, choices=[0, 1], help="Optionally restrict to one class.")
     parser.add_argument("--device", default=None, help="Device override, e.g. cpu or cuda.")
     args = parser.parse_args()
 
-    config = load_config(args.config)
-    model_path = args.model or get_config_value(config, "model", "path")
-    data_path = args.data or get_config_value(config, "data", "path")
-    sample_rate = args.sample_rate or float(get_config_value(config, "data", "sample_rate", 400.0))
-
-    if model_path is None:
-        raise ValueError("No model path provided. Use --model or set model.path in the config.")
-    if data_path is None:
-        raise ValueError("No data path provided. Use --data or set data.path in the config.")
-
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.filters:
-        filter_ids = parse_filter_ids(args.filters)
-    elif args.concepts:
-        filter_ids = select_filters_from_concepts(
-            concepts_dir=args.concepts,
-            layer_name=args.layer,
-            n_filters=args.n_filters,
-            prototype_class=args.prototype_class,
-            prototype_id=args.prototype_id,
-        )
-    else:
-        raise ValueError("Provide either --filters or --concepts to choose filters.")
-
-    print(f"Using sample_rate={sample_rate} Hz")
-    print(f"Using top_k={args.top_k} top-activating samples/windows per filter")
-
-    model = load_model(model_path, device)
-    dataset = VibrationDataset(data_path)
+    filter_ids = parse_filter_ids(args.filters)
+    model = load_model(args.model, device)
+    dataset = VibrationDataset(args.data)
 
     rows_by_filter = collect_top_filter_windows(
         model=model,
@@ -501,7 +389,7 @@ def main() -> None:
         filter_ids=filter_ids,
         top_k=args.top_k,
         window_size=args.window_size,
-        sample_rate=sample_rate,
+        sample_rate=args.sample_rate,
         batch_size=args.batch_size,
         device=device,
         class_id=args.class_id,
@@ -513,7 +401,7 @@ def main() -> None:
             layer_name=args.layer,
             rows=rows,
             output_dir=output_dir,
-            sample_rate=sample_rate,
+            sample_rate=args.sample_rate,
         )
 
     write_summary(rows_by_filter, args.layer, output_dir)
