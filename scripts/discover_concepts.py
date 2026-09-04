@@ -238,6 +238,10 @@ def run_variant_c(
     for class_id in [0, 1]:
         # Load concept relevances
         h5_path = os.path.join(features_path, f"eps_relevances_class_{class_id}.hdf5")
+
+        # Force replace any backslashes with forward slashes
+        h5_path = h5_path.replace("\\", "/")
+
         if not os.path.exists(h5_path):
             print(f"Warning: Features not found at {h5_path}")
             continue
